@@ -25,6 +25,9 @@ function SiteHeader() {
         <Link className="hover:text-white" href="/org">
           Organisateur
         </Link>
+        <Link className="hover:text-white" href="/login">
+          Login
+        </Link>
       </nav>
     </header>
   );
@@ -53,6 +56,7 @@ export default function RootLayout({
   return (
     <html lang="fr">
       <body className="min-h-screen bg-[#1B003B] text-white">
+        <div className="sidetick-glow" />
         <div className="mx-auto max-w-5xl px-6 py-10">
           <SiteHeader />
           <main className="py-12">{children}</main>
