@@ -29,14 +29,14 @@ export default function LoginPage() {
     }
 
     setStatus("sent");
-    setMessage("Magic link envoyé ! Vérifie ta boîte mail (et les spams).");
+    setMessage("Lien envoyé ! Clique dans l’email pour te connecter (ou créer ton compte).");
   }
 
   return (
     <section className="max-w-md">
       <h1 className="text-3xl font-bold">Connexion</h1>
       <p className="mt-3 text-white/80">
-        On t’envoie un lien de connexion par email (magic link).
+        Entre ton email : si tu as déjà un compte, tu te connectes. Sinon, on crée ton compte automatiquement.
       </p>
 
       <form onSubmit={sendMagicLink} className="mt-8 space-y-4">

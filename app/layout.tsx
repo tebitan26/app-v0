@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import Link from "next/link";
+import AuthNav from "./components/AuthNav";
 
 export const metadata: Metadata = {
   title: "Sidetick V0",
@@ -25,9 +26,7 @@ function SiteHeader() {
         <Link className="hover:text-white" href="/org">
           Organisateur
         </Link>
-        <Link className="hover:text-white" href="/login">
-          Login
-        </Link>
+        <AuthNav />
       </nav>
     </header>
   );

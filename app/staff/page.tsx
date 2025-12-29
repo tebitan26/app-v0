@@ -3,19 +3,17 @@
 import Link from "next/link";
 import { useSessionProfile } from "../lib/useSessionProfile";
 
-export default function OrgPage() {
+export default function StaffPage() {
   const { loading, role } = useSessionProfile();
 
   if (loading) return <p className="text-white/70">Chargement…</p>;
 
-  const allowed = role === "ORGANIZER" || role === "ADMIN";
+  const allowed = role === "STAFF" || role === "ADMIN";
   if (!allowed) {
     return (
       <section>
-        <h1 className="text-3xl font-bold">Espace organisateur</h1>
-        <p className="mt-4 text-white/80">
-          Accès réservé aux organisateurs.
-        </p>
+        <h1 className="text-3xl font-bold">Staff</h1>
+        <p className="mt-4 text-white/80">Accès réservé au staff.</p>
         <Link
           href="/login"
           className="mt-6 inline-flex rounded-xl bg-[#7A3CFF] px-5 py-3 font-medium hover:opacity-90"
@@ -28,9 +26,9 @@ export default function OrgPage() {
 
   return (
     <section>
-      <h1 className="text-3xl font-bold">Espace organisateur</h1>
+      <h1 className="text-3xl font-bold">Staff</h1>
       <p className="mt-4 text-white/80">
-        Ici l’organisateur pourra créer un événement et ajouter des lots de billets.
+        Ici on fera le scan QR et la validation anti-doublon (Sprint scan).
       </p>
     </section>
   );
