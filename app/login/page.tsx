@@ -1,17 +1,44 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "../lib/supabaseClient";
 
 export default function LoginPage() {
+  const router = useRouter();
   const [email, setEmail] = useState("");
   const [status, setStatus] = useState<"idle" | "loading" | "sent" | "error">(
     "idle"
   );
   const [message, setMessage] = useState("");
 
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      if (data.session) router.replace("/events");
+    });
+  }, [router]);
+
+  async function loginWithGoogle() {
+    const redirectTo = `${window.location.origin}/auth/callback`;
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: { redirectTo },
+    });
+    if (error) {
+      setStatus("error");
+      setMessage(error.message);
+    }
+  }
+
   async function sendMagicLink(e: React.FormEvent) {
     e.preventDefault();
+
+    const { data: sessionData } = await supabase.auth.getSession();
+    if (sessionData.session) {
+      router.replace("/events");
+      return;
+    }
+
     setStatus("loading");
     setMessage("");
 
@@ -38,6 +65,22 @@ export default function LoginPage() {
       <p className="mt-3 text-white/80">
         Entre ton email : si tu as déjà un compte, tu te connectes. Sinon, on crée ton compte automatiquement.
       </p>
+
+      <div className="mt-6 space-y-3">
+        <button
+          type="button"
+          onClick={loginWithGoogle}
+          className="w-full rounded-xl border border-white/15 bg-white/5 px-5 py-3 font-medium hover:bg-white/10"
+        >
+          Continuer avec Google
+        </button>
+
+        <div className="flex items-center gap-3">
+          <div className="h-px flex-1 bg-white/10" />
+          <span className="text-xs text-white/50">ou</span>
+          <div className="h-px flex-1 bg-white/10" />
+        </div>
+      </div>
 
       <form onSubmit={sendMagicLink} className="mt-8 space-y-4">
         <div>

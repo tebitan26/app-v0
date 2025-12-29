@@ -9,6 +9,8 @@ export default function AuthNav() {
 
   async function logout() {
     await supabase.auth.signOut();
+    // Force a full refresh so header state updates immediately
+    window.location.href = "/";
   }
 
   if (loading) return <div className="text-sm text-white/50">…</div>;
