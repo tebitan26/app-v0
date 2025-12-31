@@ -25,9 +25,21 @@ export default function AuthNav() {
 
   return (
     <div className="flex items-center gap-3 text-sm">
-      <span className="text-white/70">
+      <Link
+        href="/me/tickets"
+        className="text-white/70 hover:text-white underline-offset-4 hover:underline"
+        title="Mes billets"
+      >
         {userEmail} <span className="text-[#7A3CFF]">({role ?? "?"})</span>
-      </span>
+      </Link>
+
+      <Link
+        href="/me/tickets"
+        className="rounded-xl border border-white/15 bg-white/5 px-3 py-1 text-xs text-white/80 hover:bg-white/10"
+      >
+        Mes billets
+      </Link>
+
       <button onClick={logout} className="hover:text-white text-white/70">
         Logout
       </button>
