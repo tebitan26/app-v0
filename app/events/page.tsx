@@ -22,10 +22,12 @@ export default function EventsPage() {
       setLoading(true);
       setErr(null);
 
+      const cutoffIso = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
       const { data, error } = await supabase
         .from("events")
         .select("id,title,city,venue_name,start_at")
         .eq("status", "PUBLISHED")
+        .gte("start_at", cutoffIso)
         .order("start_at", { ascending: true });
 
       if (error) setErr(error.message);
