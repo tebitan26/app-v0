@@ -109,7 +109,10 @@ export async function POST(req: Request) {
     }
 
     // 3) créer Stripe checkout session
-    const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+    const siteUrl =
+  process.env.NEXT_PUBLIC_SITE_URL ||
+  process.env.NEXT_PUBLIC_APP_URL ||
+  "http://localhost:3000";
     const eventId = event?.id ?? batch.event_id ?? null;
 
     const session = await stripe.checkout.sessions.create({
