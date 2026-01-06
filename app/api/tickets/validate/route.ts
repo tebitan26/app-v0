@@ -5,71 +5,271 @@ import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
 import { supabaseAdmin } from "@/app/lib/supabaseAdmin";
 
+const DEFAULT_UNLOCK_HOURS = 2;
+
 export async function POST(req: Request) {
-  const { token } = await req.json().catch(() => ({}));
-  if (!token) return NextResponse.json({ error: "missing_token" }, { status: 400 });
+  const body = await req.json().catch(() => ({}));
+  const token = typeof body?.token === "string" ? body.token.trim() : "";
+
+  if (!token) {
+    return NextResponse.json(
+      { ok: false, error: "missing_token" },
+      { status: 400 }
+    );
+  }
+
+  const now = new Date();
+  const nowIso = now.toISOString();
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
   if (!supabaseUrl || !supabaseAnonKey) {
-    return NextResponse.json({ error: "missing_supabase_env" }, { status: 500 });
+    console.error("missing_supabase_env", {
+      hasUrl: Boolean(supabaseUrl),
+      hasAnon: Boolean(supabaseAnonKey),
+    });
+    return NextResponse.json(
+      { ok: false, error: "internal_error" },
+      { status: 500 }
+    );
   }
 
+  // NOTE: In recent Next.js versions, `cookies()` is async in Route Handlers.
+  // Await it to avoid TS treating it as `Promise<ReadonlyRequestCookies>`.
   const cookieStore = await cookies();
+
   const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
     cookies: {
       getAll: () => cookieStore.getAll(),
       setAll: (toSet) => {
-        toSet.forEach(({ name, value, options }) => cookieStore.set(name, value, options));
+        // In Route Handlers this should be mutable, but keep this guard for TS/runtime safety.
+        const set = (cookieStore as any).set;
+        if (typeof set !== "function") return;
+        toSet.forEach(({ name, value, options }) => set.call(cookieStore, name, value, options));
       },
     },
   });
 
-  const { data: userData, error: userErr } = await supabase.auth.getUser();
-  if (userErr || !userData?.user) {
-    return NextResponse.json({ error: "not_authenticated" }, { status: 401 });
+  const { data: userData, error: userError } = await supabase.auth.getUser();
+  if (userError || !userData?.user?.id) {
+    return NextResponse.json(
+      { ok: false, error: "not_authenticated" },
+      { status: 401 }
+    );
   }
 
-  const nowIso = new Date().toISOString();
-  const { data: tokenRow, error: tokenErr } = await supabaseAdmin
-    .from("ticket_tokens")
-    .select("id,token,expires_at,ticket_id,tickets(id,used_at)")
-    .eq("token", token)
-    .gt("expires_at", nowIso)
+  const { data: profile, error: profileError } = await supabaseAdmin
+    .from("profiles")
+    .select("role, organizer_id")
+    .eq("id", userData.user.id)
     .single();
 
-  if (tokenErr || !tokenRow) {
-    return NextResponse.json({ error: "invalid_token" }, { status: 401 });
+  if (profileError) {
+    console.error("profile_lookup_failed", profileError);
+    return NextResponse.json(
+      { ok: false, error: "internal_error" },
+      { status: 500 }
+    );
   }
 
-  const ticket = Array.isArray((tokenRow as any).tickets)
-    ? (tokenRow as any).tickets[0]
-    : (tokenRow as any).tickets;
+  const role = (profile?.role ?? "").toString().toUpperCase();
+  const staffOrganizerId = (profile as any)?.organizer_id ?? null;
 
-  if (!ticket?.id) {
-    return NextResponse.json({ error: "ticket_not_found" }, { status: 404 });
+  if (role !== "STAFF" && role !== "ORGANIZER" && role !== "ADMIN") {
+    return NextResponse.json(
+      { ok: false, error: "forbidden" },
+      { status: 403 }
+    );
   }
 
-  if (ticket.used_at) {
-    return NextResponse.json({ ok: false, reason: "already_used", used_at: ticket.used_at });
+  // If a STAFF has no organizer_id mapping, they cannot validate anything.
+  if (role === "STAFF" && !staffOrganizerId) {
+    return NextResponse.json(
+      { ok: false, error: "staff_missing_organizer" },
+      { status: 403 }
+    );
   }
 
-  const usedAt = new Date().toISOString();
-  const { data: updated, error: upErr } = await supabaseAdmin
+  const { data: tokenRows, error: tokenError } = await supabaseAdmin
+    .from("ticket_tokens")
+    .select("token,ticket_id,expires_at")
+    .eq("token", token)
+    .limit(1);
+
+  if (tokenError) {
+    console.error("ticket_tokens_lookup_failed", tokenError);
+    return NextResponse.json(
+      { ok: false, error: "internal_error" },
+      { status: 500 }
+    );
+  }
+
+  const tokenRow = tokenRows?.[0];
+  if (!tokenRow) {
+    return NextResponse.json(
+      { ok: false, error: "token_not_found" },
+      { status: 404 }
+    );
+  }
+
+  if (tokenRow.expires_at) {
+    const expiresAt = new Date(tokenRow.expires_at).getTime();
+    if (Number.isFinite(expiresAt) && expiresAt < now.getTime()) {
+      return NextResponse.json(
+        { ok: false, error: "token_expired" },
+        { status: 410 }
+      );
+    }
+  }
+
+  const { data: ticketRows, error: ticketError } = await supabaseAdmin
     .from("tickets")
-    .update({ used_at: usedAt, status: "USED" })
-    .eq("id", ticket.id)
+    .select(
+      "id,owner_id,status,used_at,event_id,batch_id,events(title,start_at,city,venue_name,ticket_unlock_hours,organizer_id),ticket_batches(name)"
+    )
+    .eq("id", tokenRow.ticket_id)
+    .limit(1);
+
+  if (ticketError) {
+    console.error("ticket_lookup_failed", ticketError);
+    return NextResponse.json(
+      { ok: false, error: "internal_error" },
+      { status: 500 }
+    );
+  }
+
+  const ticketRow = ticketRows?.[0];
+  if (!ticketRow) {
+    return NextResponse.json(
+      { ok: false, error: "ticket_not_found" },
+      { status: 404 }
+    );
+  }
+
+  const eventRow = Array.isArray(ticketRow.events)
+    ? ticketRow.events[0]
+    : ticketRow.events;
+  const batchRow = Array.isArray(ticketRow.ticket_batches)
+    ? ticketRow.ticket_batches[0]
+    : ticketRow.ticket_batches;
+
+  // P0 security: staff can validate ONLY events of their organizer.
+  // Organizers can validate ONLY their own events.
+  const eventOrganizerId = (eventRow as any)?.organizer_id ?? null;
+  if (!eventOrganizerId) {
+    return NextResponse.json(
+      { ok: false, error: "event_missing_organizer" },
+      { status: 500 }
+    );
+  }
+
+  if (role === "ORGANIZER") {
+    if (eventOrganizerId !== userData.user.id) {
+      return NextResponse.json(
+        { ok: false, error: "forbidden_event" },
+        { status: 403 }
+      );
+    }
+  }
+
+  if (role === "STAFF") {
+    if (eventOrganizerId !== staffOrganizerId) {
+      return NextResponse.json(
+        { ok: false, error: "forbidden_event" },
+        { status: 403 }
+      );
+    }
+  }
+
+  if (ticketRow.used_at) {
+    return NextResponse.json(
+      { ok: false, error: "already_used", used_at: ticketRow.used_at },
+      { status: 409 }
+    );
+  }
+
+  if (eventRow?.start_at) {
+    const unlockHours =
+      eventRow.ticket_unlock_hours ?? DEFAULT_UNLOCK_HOURS;
+    const unlockAtMs =
+      new Date(eventRow.start_at).getTime() - unlockHours * 60 * 60 * 1000;
+    if (Number.isFinite(unlockAtMs) && now.getTime() < unlockAtMs) {
+      const unlockAtIso = new Date(unlockAtMs).toISOString();
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "ticket_locked",
+          unlock_at: unlockAtIso,
+          unlock_at_ts: unlockAtMs,
+        },
+        { status: 423 }
+      );
+    }
+  }
+
+  const { data: updatedRows, error: updateError } = await supabaseAdmin
+    .from("tickets")
+    .update({ used_at: nowIso, status: "USED" })
+    .eq("id", ticketRow.id)
     .is("used_at", null)
     .select("id,used_at")
-    .single();
+    .limit(1);
 
-  if (upErr) return NextResponse.json({ error: upErr.message }, { status: 500 });
-
-  if (!updated) {
-    return NextResponse.json({ ok: false, reason: "already_used" });
+  if (updateError) {
+    console.error("ticket_update_failed", updateError);
+    return NextResponse.json(
+      { ok: false, error: "internal_error" },
+      { status: 500 }
+    );
   }
 
-  await supabaseAdmin.from("ticket_tokens").delete().eq("id", tokenRow.id);
+  const updated = updatedRows?.[0];
+  if (!updated) {
+    const { data: usedRows, error: usedError } = await supabaseAdmin
+      .from("tickets")
+      .select("used_at")
+      .eq("id", ticketRow.id)
+      .limit(1);
 
-  return NextResponse.json({ ok: true });
+    if (usedError) {
+      console.error("ticket_used_lookup_failed", usedError);
+    }
+
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "already_used",
+        used_at: usedRows?.[0]?.used_at ?? null,
+      },
+      { status: 409 }
+    );
+  }
+
+  const { error: tokenCleanupError } = await supabaseAdmin
+    .from("ticket_tokens")
+    .delete()
+    .eq("ticket_id", ticketRow.id);
+
+  if (tokenCleanupError) {
+    console.error("ticket_token_cleanup_failed", tokenCleanupError);
+  }
+
+  return NextResponse.json({
+    ok: true,
+    ticket_id: ticketRow.id,
+    event: {
+      title: eventRow?.title ?? null,
+      start_at: eventRow?.start_at ?? null,
+      city: eventRow?.city ?? null,
+      venue_name: eventRow?.venue_name ?? null,
+      ticket_unlock_hours: eventRow?.ticket_unlock_hours ?? null,
+      organizer_id: (eventRow as any)?.organizer_id ?? null,
+    },
+    batch: {
+      id: ticketRow.batch_id ?? null,
+      name: batchRow?.name ?? null,
+    },
+    used_at: updated.used_at ?? nowIso,
+  });
 }

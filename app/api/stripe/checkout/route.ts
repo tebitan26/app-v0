@@ -3,7 +3,9 @@ import { createClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "");
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
+  apiVersion: "2025-12-15.clover",
+});
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL || "",
@@ -107,7 +109,8 @@ export async function POST(req: Request) {
     }
 
     // 3) créer Stripe checkout session
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+    const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+    const eventId = event?.id ?? batch.event_id ?? null;
 
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
@@ -123,8 +126,8 @@ export async function POST(req: Request) {
           },
         },
       ],
-      success_url: `${appUrl}/events/${event.id}?success=1`,
-      cancel_url: `${appUrl}/events/${event.id}?canceled=1`,
+      success_url: `${siteUrl}/checkout/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: eventId ? `${siteUrl}/events/${eventId}` : `${siteUrl}/events`,
       metadata: {
         order_id: order.id,
         event_id: event.id,

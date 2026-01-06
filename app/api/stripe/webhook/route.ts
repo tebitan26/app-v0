@@ -3,12 +3,25 @@ import { createClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "");
+const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
 
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-  process.env.SUPABASE_SERVICE_ROLE_KEY || ""
-);
+if (!stripeSecretKey) {
+  throw new Error("Missing STRIPE_SECRET_KEY env var");
+}
+
+// Pin API version to avoid type/version mismatch between local and build
+const stripe = new Stripe(stripeSecretKey, {
+  apiVersion: "2025-12-15.clover",
+});
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+if (!supabaseUrl || !supabaseServiceRoleKey) {
+  throw new Error("Missing Supabase admin env vars (NEXT_PUBLIC_SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY)");
+}
+
+const supabaseAdmin = createClient(supabaseUrl, supabaseServiceRoleKey);
 
 export async function POST(req: Request) {
   const sig = req.headers.get("stripe-signature");

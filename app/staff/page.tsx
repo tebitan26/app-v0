@@ -1,348 +1,354 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { supabase } from "../lib/supabaseClient";
+import { useSessionProfile } from "../lib/useSessionProfile";
 
-type ValidateResponse =
+type ValidationState =
+  | { status: "idle" }
+  | { status: "loading" }
   | {
-      ok: true;
-      status: "VALID" | "ALREADY_USED" | "INVALID" | "NOT_FOUND";
-      message?: string;
-      ticket_id?: string;
-      event_id?: string;
-      used_at?: string | null;
+      status: "success";
+      data: {
+        ticket_id: string;
+        used_at: string | null;
+        event: {
+          title: string | null;
+          start_at: string | null;
+          city: string | null;
+        };
+        batch: {
+          name: string | null;
+        };
+      };
     }
   | {
-      ok: false;
-      error: string;
+      status: "error";
+      message: string;
+      code?: string;
+      unlock_at?: string | null;
     };
-
-function cx(...xs: Array<string | false | null | undefined>) {
-  return xs.filter(Boolean).join(" ");
-}
 
 export default function StaffScannerPage() {
-  const [email, setEmail] = useState<string | null>(null);
-  const [role, setRole] = useState<string | null>(null);
-  const [authLoading, setAuthLoading] = useState(true);
+  const { loading, role } = useSessionProfile();
+  const searchParams = useSearchParams();
+  const initialToken = useMemo(
+    () => searchParams.get("token") ?? "",
+    [searchParams]
+  );
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [token, setToken] = useState(initialToken);
+  const [state, setState] = useState<ValidationState>({ status: "idle" });
+  const isLoading = state.status === "loading";
 
-  const [token, setToken] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<ValidateResponse | null>(null);
+  function focusInput() {
+    inputRef.current?.focus();
+  }
 
-  const [cameraSupported, setCameraSupported] = useState(false);
-  const [cameraOn, setCameraOn] = useState(false);
-  const [cameraError, setCameraError] = useState<string | null>(null);
+  function beep(type: "success" | "error") {
+    try {
+      if (typeof window === "undefined") return;
+      const AudioCtx =
+        window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const duration = type === "success" ? 0.08 : 0.14;
+      osc.type = "sine";
+      osc.frequency.value = type === "success" ? 880 : 220;
+      gain.gain.value = 0.12;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + duration);
+      osc.onended = () => ctx.close();
+    } catch {
+      return;
+    }
+  }
 
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const rafRef = useRef<number | null>(null);
-  const lastSeenRef = useRef<{ value: string; at: number } | null>(null);
+  async function validateToken(nextToken: string) {
+    if (isLoading) return;
+    const trimmed = nextToken.trim();
+    if (!trimmed) {
+      setState({
+        status: "error",
+        message: "Ajoute un token pour valider.",
+        code: "missing_token",
+      });
+      return;
+    }
 
-  const canScan = useMemo(() => {
-    // V0: allow ORGANIZER to validate too (so you can test now)
-    return role === "STAFF" || role === "ORGANIZER";
-  }, [role]);
-
-  useEffect(() => {
-    const supported = typeof window !== "undefined" && "BarcodeDetector" in window;
-    setCameraSupported(Boolean(supported));
-  }, []);
-
-  useEffect(() => {
-    let mounted = true;
-
-    (async () => {
-      setAuthLoading(true);
-      const { data } = await supabase.auth.getSession();
-      const user = data.session?.user ?? null;
-      if (!mounted) return;
-
-      if (!user) {
-        setEmail(null);
-        setRole(null);
-        setAuthLoading(false);
-        return;
-      }
-
-      setEmail(user.email ?? null);
-
-      const { data: prof, error } = await supabase
-        .from("profiles")
-        .select("role")
-        .eq("id", user.id)
-        .single();
-
-      if (!mounted) return;
-
-      if (error) setRole(null);
-      else setRole((prof as any)?.role ?? null);
-
-      setAuthLoading(false);
-    })();
-
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  async function validate(scannedToken: string) {
-    const t = (scannedToken || "").trim();
-    if (!t) return;
-
-    setBusy(true);
-    setResult(null);
+    setState({ status: "loading" });
 
     try {
       const res = await fetch("/api/tickets/validate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token: t }),
+        body: JSON.stringify({ token: trimmed }),
       });
 
-      const json = (await res.json()) as ValidateResponse;
-      setResult(json);
-      setToken(t);
-    } catch (e: any) {
-      setResult({ ok: false, error: e?.message ?? "Erreur réseau" });
-    } finally {
-      setBusy(false);
-    }
-  }
+      const payload = await res.json().catch(() => ({}));
 
-  async function startCamera() {
-    setCameraError(null);
+      if (!res.ok) {
+        const message = payload?.error || "Impossible de valider le ticket.";
+        setState({
+          status: "error",
+          message,
+          code: payload?.error,
+          unlock_at: payload?.unlock_at ?? null,
+        });
+        return;
+      }
 
-    if (!videoRef.current) {
-      setCameraError("Élément vidéo introuvable.");
-      return;
-    }
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: "environment" } },
-        audio: false,
+      setState({
+        status: "success",
+        data: {
+          ticket_id: payload.ticket_id ?? payload.ticketId ?? "",
+          used_at: payload.used_at ?? null,
+          event: {
+            title: payload.event?.title ?? null,
+            start_at: payload.event?.start_at ?? null,
+            city: payload.event?.city ?? null,
+          },
+          batch: {
+            name: payload.batch?.name ?? null,
+          },
+        },
       });
-
-      streamRef.current = stream;
-      videoRef.current.srcObject = stream;
-      await videoRef.current.play();
-      setCameraOn(true);
-
-      // @ts-expect-error available at runtime when supported
-      const detector = new BarcodeDetector({ formats: ["qr_code"] });
-
-      const loop = async () => {
-        if (!videoRef.current) return;
-
-        try {
-          const barcodes = await detector.detect(videoRef.current);
-          if (barcodes?.length) {
-            const value = (barcodes[0] as any)?.rawValue as string;
-            if (value) {
-              const now = Date.now();
-              const last = lastSeenRef.current;
-
-              // Avoid repeating the same QR every frame
-              if (!last || last.value !== value || now - last.at > 2000) {
-                lastSeenRef.current = { value, at: now };
-                await validate(value);
-              }
-            }
-          }
-        } catch {
-          // ignore frame errors
-        }
-
-        rafRef.current = window.requestAnimationFrame(loop);
-      };
-
-      rafRef.current = window.requestAnimationFrame(loop);
-    } catch (e: any) {
-      setCameraError(e?.message ?? "Impossible d'accéder à la caméra.");
-      setCameraOn(false);
+    } catch {
+      setState({
+        status: "error",
+        message: "Erreur réseau. Réessaie.",
+        code: "network_error",
+      });
     }
-  }
-
-  function stopCamera() {
-    if (rafRef.current) {
-      cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
-    }
-
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
-    }
-
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-    }
-
-    setCameraOn(false);
   }
 
   useEffect(() => {
-    return () => stopCamera();
+    if (initialToken) validateToken(initialToken);
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialToken]);
+
+  function reset() {
+    setToken("");
+    setState({ status: "idle" });
+    focusInput();
+  }
+
+  useEffect(() => {
+    focusInput();
   }, []);
 
-  const badge = useMemo(() => {
-    if (!result) return null;
+  useEffect(() => {
+    if (state.status === "success") {
+      beep("success");
+      if (navigator?.vibrate) navigator.vibrate(80);
+      focusInput();
+    }
+    if (state.status === "error") {
+      beep("error");
+      if (navigator?.vibrate) navigator.vibrate([40, 40, 40]);
+      focusInput();
+    }
+  }, [state.status]);
 
-    if (!result.ok) {
-      return { label: "ERREUR", cls: "bg-red-500/15 border-red-500/30 text-red-200" };
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        reset();
+      }
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "l") {
+        event.preventDefault();
+        focusInput();
+      }
     }
 
-    if (result.status === "VALID") {
-      return { label: "OK", cls: "bg-emerald-500/15 border-emerald-500/30 text-emerald-200" };
-    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
-    if (result.status === "ALREADY_USED") {
-      return { label: "DÉJÀ UTILISÉ", cls: "bg-amber-500/15 border-amber-500/30 text-amber-200" };
-    }
+  function handlePaste(event: React.ClipboardEvent<HTMLInputElement>) {
+    const pasted = event.clipboardData.getData("text");
+    if (!pasted) return;
+    event.preventDefault();
+    setToken(pasted);
+    validateToken(pasted);
+  }
 
-    return { label: "INVALIDE", cls: "bg-red-500/15 border-red-500/30 text-red-200" };
-  }, [result]);
+  if (loading) return <p className="text-white/70">Chargement…</p>;
+
+  // ✅ Autoriser STAFF + ORGANIZER + ADMIN à utiliser le scanner
+  if (role !== "STAFF" && role !== "ORGANIZER" && role !== "ADMIN") {
+    return (
+      <section className="space-y-4">
+        <h1 className="text-3xl font-bold">Accès refusé</h1>
+        <p className="text-white/70">
+          Vous n’avez pas les permissions pour accéder à ce scanner.
+        </p>
+        <Link
+          href="/"
+          className="inline-flex rounded-xl bg-[#7A3CFF] px-5 py-3 font-medium hover:opacity-90"
+        >
+          Retour à l’accueil
+        </Link>
+      </section>
+    );
+  }
 
   return (
     <section className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-bold">Scanner staff</h1>
-          <p className="mt-2 text-white/70">Scanne un QR Sidetick ou colle un token pour valider un billet.</p>
-          <p className="mt-1 text-xs text-white/50">V0: validation serveur + anti double-scan (used_at).</p>
-        </div>
-
-        <Link
-          href="/"
-          className="rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-sm text-white/80 hover:bg-white/10"
-        >
-          Accueil
-        </Link>
+      <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
+        <h1 className="text-3xl font-bold">Scanner staff</h1>
+        <p className="mt-2 text-white/70">
+          Valide les billets en scannant ou en collant un token.
+        </p>
       </div>
 
-      {authLoading ? (
-        <p className="text-white/60">Vérification session…</p>
-      ) : !email ? (
-        <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
-          <p className="text-white/80">Tu dois être connecté.</p>
-          <Link href="/login" className="mt-3 inline-flex rounded-xl bg-[#7A3CFF] px-4 py-2 text-sm font-medium hover:opacity-90">
-            Se connecter
-          </Link>
-        </div>
-      ) : !canScan ? (
-        <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-5">
-          <p className="text-red-200 font-medium">Accès refusé</p>
-          <p className="mt-2 text-red-200/80">
-            Ton rôle est <span className="font-semibold">{role ?? "inconnu"}</span>. Il faut <span className="font-semibold">STAFF</span> (ou ORGANIZER en V0).
+      <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm font-medium uppercase tracking-wide text-white/60">
+            Contrôle d'accès
           </p>
+          {state.status !== "idle" ? (
+            <span
+              className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                state.status === "loading"
+                  ? "border border-white/10 bg-white/10 text-white/80"
+                  : state.status === "success"
+                  ? "border border-emerald-400/30 bg-emerald-400/10 text-emerald-100"
+                  : "border border-red-500/30 bg-red-500/10 text-red-200"
+              }`}
+            >
+              {state.status.toUpperCase()}
+            </span>
+          ) : null}
         </div>
-      ) : (
-        <>
-          <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
-            <div className="flex items-center justify-between gap-3">
-              <div className="text-sm text-white/70">
-                Connecté: <span className="text-white/90">{email}</span> · rôle: {role}
-              </div>
 
-              {badge ? (
-                <div className={cx("rounded-full border px-3 py-1 text-xs font-semibold", badge.cls)}>{badge.label}</div>
-              ) : null}
-            </div>
-
-            <div className="mt-5 grid gap-4 md:grid-cols-2">
-              <div className="rounded-xl border border-white/10 bg-black/20 p-4">
-                <p className="text-sm font-semibold">Saisie manuelle</p>
-                <p className="mt-1 text-xs text-white/60">Colle le token (QR) ou un code.</p>
-
-                <div className="mt-3 flex gap-2">
-                  <input
-                    value={token}
-                    onChange={(e) => setToken(e.target.value)}
-                    placeholder="token QR…"
-                    className="w-full rounded-xl border border-white/15 bg-black/30 px-3 py-2 text-sm text-white placeholder:text-white/30"
-                  />
-                  <button
-                    onClick={() => validate(token)}
-                    disabled={busy || !token.trim()}
-                    className="rounded-xl bg-[#7A3CFF] px-4 py-2 text-sm font-medium hover:opacity-90 disabled:opacity-50"
-                  >
-                    Valider
-                  </button>
-                </div>
-
-                <div className="mt-3 flex gap-2">
-                  <button
-                    onClick={() => {
-                      setToken("");
-                      setResult(null);
-                    }}
-                    className="rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-sm text-white/80 hover:bg-white/10"
-                  >
-                    Reset
-                  </button>
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-white/10 bg-black/20 p-4">
-                <p className="text-sm font-semibold">Caméra</p>
-                <p className="mt-1 text-xs text-white/60">Nécessite un navigateur supportant BarcodeDetector.</p>
-
-                {!cameraSupported ? (
-                  <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">
-                    Scan caméra non supporté ici. Utilise la saisie manuelle.
-                  </div>
-                ) : (
-                  <>
-                    <div className="mt-3 flex gap-2">
-                      {!cameraOn ? (
-                        <button onClick={startCamera} className="rounded-xl bg-[#7A3CFF] px-4 py-2 text-sm font-medium hover:opacity-90">
-                          Démarrer caméra
-                        </button>
-                      ) : (
-                        <button onClick={stopCamera} className="rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-sm text-white/80 hover:bg-white/10">
-                          Stop
-                        </button>
-                      )}
-                    </div>
-
-                    {cameraError ? (
-                      <div className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-200">{cameraError}</div>
-                    ) : null}
-
-                    <div className="mt-3 overflow-hidden rounded-xl border border-white/10 bg-black/30">
-                      <video ref={videoRef} className="h-[260px] w-full object-cover" playsInline muted />
-                    </div>
-
-                    <p className="mt-2 text-xs text-white/50">Astuce: on bloque les doublons (même QR) pendant 2s.</p>
-                  </>
-                )}
-              </div>
-            </div>
+        <div className="mt-4 space-y-4">
+          <div>
+            <label className="text-sm text-white/70">Token</label>
+            <input
+              ref={inputRef}
+              value={token}
+              onChange={(event) => setToken(event.target.value)}
+              onPaste={handlePaste}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  validateToken(token);
+                }
+              }}
+              disabled={isLoading}
+              placeholder="Colle le token du billet…"
+              className="mt-2 w-full rounded-xl border border-white/15 bg-black/40 px-4 py-3 text-white outline-none placeholder:text-white/40 focus:border-[#7A3CFF] disabled:opacity-60"
+            />
           </div>
 
-          {result ? (
-            <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
-              <p className="text-sm font-semibold">Résultat</p>
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={() => validateToken(token)}
+              disabled={isLoading}
+              className="inline-flex rounded-xl bg-[#7A3CFF] px-5 py-3 font-medium hover:opacity-90 disabled:opacity-60"
+            >
+              {isLoading ? "Validation…" : "Valider"}
+            </button>
+            <button
+              type="button"
+              onClick={reset}
+              className="inline-flex rounded-xl border border-white/15 bg-white/5 px-5 py-3 font-medium hover:bg-white/10"
+            >
+              Effacer
+            </button>
+          </div>
 
-              {!result.ok ? (
-                <p className="mt-2 text-sm text-red-200">{result.error}</p>
-              ) : (
-                <div className="mt-2 space-y-1 text-sm text-white/80">
-                  <p>
-                    Statut: <span className="font-semibold">{result.status}</span>
+          {state.status === "error" ? (
+            state.code === "ticket_locked" ? (
+              <div className="rounded-xl border border-amber-400/30 bg-amber-400/10 p-4 text-amber-100">
+                <p className="text-base font-semibold">⏳ Ticket verrouillé</p>
+                <p className="mt-1 text-sm text-amber-100/80">
+                  Déverrouillage à{" "}
+                  {state.unlock_at
+                    ? new Date(state.unlock_at).toLocaleString()
+                    : "—"}
+                </p>
+              </div>
+            ) : (
+              <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-red-200">
+                {state.message}
+              </div>
+            )
+          ) : null}
+
+          {state.status === "success" ? (
+            <div className="space-y-4">
+              <div className="rounded-xl border border-emerald-400/30 bg-emerald-400/10 p-4">
+                <p className="text-lg font-semibold">✅ Entrée autorisée</p>
+                <p className="mt-1 text-sm text-emerald-100/80">
+                  Ticket valide pour cet événement.
+                </p>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="rounded-xl border border-white/10 bg-black/20 p-4">
+                  <p className="text-sm text-white/60">Ticket ID</p>
+                  <p className="text-base font-medium">
+                    {state.data.ticket_id || "—"}
                   </p>
-                  {result.message ? <p>{result.message}</p> : null}
-                  {result.ticket_id ? <p className="text-xs text-white/60">Ticket: {result.ticket_id}</p> : null}
-                  {result.used_at ? <p className="text-xs text-white/60">Used at: {result.used_at}</p> : null}
                 </div>
-              )}
+                <div className="rounded-xl border border-white/10 bg-black/20 p-4">
+                  <p className="text-sm text-white/60">Événement</p>
+                  <p className="text-base font-medium">
+                    {state.data.event.title || "—"}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-black/20 p-4">
+                  <p className="text-sm text-white/60">Début</p>
+                  <p className="text-base font-medium">
+                    {state.data.event.start_at
+                      ? new Date(state.data.event.start_at).toLocaleString()
+                      : "—"}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-black/20 p-4">
+                  <p className="text-sm text-white/60">Ville</p>
+                  <p className="text-base font-medium">
+                    {state.data.event.city || "—"}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-black/20 p-4">
+                  <p className="text-sm text-white/60">Lot</p>
+                  <p className="text-base font-medium">
+                    {state.data.batch.name || "—"}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-black/20 p-4">
+                  <p className="text-sm text-white/60">Utilisé à</p>
+                  <p className="text-base font-medium">
+                    {state.data.used_at
+                      ? new Date(state.data.used_at).toLocaleString()
+                      : "—"}
+                  </p>
+                </div>
+              </div>
             </div>
           ) : null}
-        </>
-      )}
+
+          {state.status === "success" || state.status === "error" ? (
+            <button
+              type="button"
+              onClick={reset}
+              className="inline-flex rounded-xl bg-[#7A3CFF] px-5 py-3 font-medium hover:opacity-90"
+            >
+              Scanner suivant
+            </button>
+          ) : null}
+        </div>
+      </div>
     </section>
   );
 }
