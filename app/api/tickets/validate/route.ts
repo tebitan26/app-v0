@@ -1,13 +1,35 @@
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { createServerClient } from "@supabase/ssr";
 import { supabaseAdmin } from "@/app/lib/supabaseAdmin";
 
 const DEFAULT_UNLOCK_HOURS = 2;
 
+function getBearer(req: Request) {
+  const header = req.headers.get("authorization") ?? "";
+  if (!header.toLowerCase().startsWith("bearer ")) return null;
+  const token = header.slice("bearer ".length).trim();
+  return token || null;
+}
+
 export async function POST(req: Request) {
+  const jwt = getBearer(req);
+  if (!jwt) {
+    return NextResponse.json(
+      { ok: false, error: "not_authenticated" },
+      { status: 401 }
+    );
+  }
+
+  const { data: u, error: uErr } = await supabaseAdmin.auth.getUser(jwt);
+  if (uErr || !u?.user?.id) {
+    return NextResponse.json(
+      { ok: false, error: "not_authenticated" },
+      { status: 401 }
+    );
+  }
+
+  const userId = u.user.id;
   const body = await req.json().catch(() => ({}));
   const token = typeof body?.token === "string" ? body.token.trim() : "";
 
@@ -21,48 +43,10 @@ export async function POST(req: Request) {
   const now = new Date();
   const nowIso = now.toISOString();
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-  if (!supabaseUrl || !supabaseAnonKey) {
-    console.error("missing_supabase_env", {
-      hasUrl: Boolean(supabaseUrl),
-      hasAnon: Boolean(supabaseAnonKey),
-    });
-    return NextResponse.json(
-      { ok: false, error: "internal_error" },
-      { status: 500 }
-    );
-  }
-
-  // NOTE: In recent Next.js versions, `cookies()` is async in Route Handlers.
-  // Await it to avoid TS treating it as `Promise<ReadonlyRequestCookies>`.
-  const cookieStore = await cookies();
-
-  const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
-    cookies: {
-      getAll: () => cookieStore.getAll(),
-      setAll: (toSet) => {
-        // In Route Handlers this should be mutable, but keep this guard for TS/runtime safety.
-        const set = (cookieStore as any).set;
-        if (typeof set !== "function") return;
-        toSet.forEach(({ name, value, options }) => set.call(cookieStore, name, value, options));
-      },
-    },
-  });
-
-  const { data: userData, error: userError } = await supabase.auth.getUser();
-  if (userError || !userData?.user?.id) {
-    return NextResponse.json(
-      { ok: false, error: "not_authenticated" },
-      { status: 401 }
-    );
-  }
-
   const { data: profile, error: profileError } = await supabaseAdmin
     .from("profiles")
     .select("role, organizer_id")
-    .eq("id", userData.user.id)
+    .eq("id", userId)
     .single();
 
   if (profileError) {
@@ -165,7 +149,7 @@ export async function POST(req: Request) {
   }
 
   if (role === "ORGANIZER") {
-    if (eventOrganizerId !== userData.user.id) {
+    if (eventOrganizerId !== userId) {
       return NextResponse.json(
         { ok: false, error: "forbidden_event" },
         { status: 403 }

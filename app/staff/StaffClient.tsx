@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useSessionProfile } from "../lib/useSessionProfile";
+import { supabase } from "../lib/supabaseClient";
 
 type ValidationState =
   | { status: "idle" }
@@ -84,9 +85,15 @@ export default function StaffClient() {
     setState({ status: "loading" });
 
     try {
+      const { data } = await supabase.auth.getSession();
+      const accessToken = data.session?.access_token;
+
       const res = await fetch("/api/tickets/validate", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        },
         body: JSON.stringify({ token: trimmed }),
       });
 
