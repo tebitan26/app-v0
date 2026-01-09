@@ -50,3 +50,25 @@ export async function requireOrganizerOrAdmin(userId: string) {
 
   return { profile: data, role };
 }
+
+export async function requireStaffOrOrganizerAdmin(userId: string) {
+  const admin = supabaseAdminClient();
+  const { data, error } = await admin
+    .from("profiles")
+    .select("role,organizer_id,email,display_name")
+    .eq("id", userId)
+    .single();
+
+  if (error || !data) return { error: "profile_not_found" as const };
+
+  const role = String(data.role || "").toUpperCase();
+  const allowed = role === "STAFF" || role === "ORGANIZER" || role === "ADMIN";
+  if (!allowed) return { error: "forbidden" as const };
+
+  const staffOrganizerId = (data as any)?.organizer_id ?? null;
+  if (role === "STAFF" && !staffOrganizerId) {
+    return { error: "staff_missing_organizer" as const };
+  }
+
+  return { profile: data, role, staffOrganizerId };
+}

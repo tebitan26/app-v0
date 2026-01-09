@@ -2,255 +2,276 @@ export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/app/lib/supabaseAdmin";
+import {
+  requireStaffOrOrganizerAdmin,
+  requireUser,
+} from "@/app/org/staff/_utils";
 
-const DEFAULT_UNLOCK_HOURS = 2;
+type ScanResult = "OK" | "REFUSED";
 
-function getBearer(req: Request) {
-  const header = req.headers.get("authorization") ?? "";
-  if (!header.toLowerCase().startsWith("bearer ")) return null;
-  const token = header.slice("bearer ".length).trim();
-  return token || null;
+type ScanLogInput = {
+  result: ScanResult;
+  reason: string | null;
+  userId?: string | null;
+  ticketId?: string | null;
+  eventId?: string | null;
+};
+
+async function logScanAttempt({
+  result,
+  reason,
+  userId,
+  ticketId,
+  eventId,
+}: ScanLogInput) {
+  const payload: Record<string, string | null> = { result, reason };
+  if (userId) payload.user_id = userId;
+  if (ticketId) payload.ticket_id = String(ticketId);
+  if (eventId) payload.event_id = String(eventId);
+
+  const { error } = await supabaseAdmin.from("logs_scan").insert(payload);
+  if (error) {
+    console.error("logs_scan_insert_failed", error);
+  }
 }
 
 export async function POST(req: Request) {
-  const jwt = getBearer(req);
-  if (!jwt) {
+  const auth = await requireUser(req);
+  if ("error" in auth) {
+    const code = "not_authenticated";
+    await logScanAttempt({ result: "REFUSED", reason: code ?? null });
     return NextResponse.json(
-      { ok: false, error: "not_authenticated" },
+      { ok: false, code, message: "Not authenticated.", error: code },
       { status: 401 }
     );
   }
 
-  const { data: u, error: uErr } = await supabaseAdmin.auth.getUser(jwt);
-  if (uErr || !u?.user?.id) {
+  const userId = auth.user.id;
+  const perm = await requireStaffOrOrganizerAdmin(userId);
+  if ("error" in perm) {
+    const code = perm.error;
+    const status = code === "profile_not_found" ? 404 : 403;
+    await logScanAttempt({ result: "REFUSED", reason: code ?? null, userId });
     return NextResponse.json(
-      { ok: false, error: "not_authenticated" },
-      { status: 401 }
+      { ok: false, code, message: code, error: code },
+      { status }
     );
   }
 
-  const userId = u.user.id;
   const body = await req.json().catch(() => ({}));
   const token = typeof body?.token === "string" ? body.token.trim() : "";
 
   if (!token) {
+    const code = "missing_token";
+    await logScanAttempt({ result: "REFUSED", reason: code ?? null, userId });
     return NextResponse.json(
-      { ok: false, error: "missing_token" },
+      { ok: false, code, message: "Missing token.", error: code },
       { status: 400 }
-    );
-  }
-
-  const now = new Date();
-  const nowIso = now.toISOString();
-
-  const { data: profile, error: profileError } = await supabaseAdmin
-    .from("profiles")
-    .select("role, organizer_id")
-    .eq("id", userId)
-    .single();
-
-  if (profileError) {
-    console.error("profile_lookup_failed", profileError);
-    return NextResponse.json(
-      { ok: false, error: "internal_error" },
-      { status: 500 }
-    );
-  }
-
-  const role = (profile?.role ?? "").toString().toUpperCase();
-  const staffOrganizerId = (profile as any)?.organizer_id ?? null;
-
-  if (role !== "STAFF" && role !== "ORGANIZER" && role !== "ADMIN") {
-    return NextResponse.json(
-      { ok: false, error: "forbidden" },
-      { status: 403 }
-    );
-  }
-
-  // If a STAFF has no organizer_id mapping, they cannot validate anything.
-  if (role === "STAFF" && !staffOrganizerId) {
-    return NextResponse.json(
-      { ok: false, error: "staff_missing_organizer" },
-      { status: 403 }
     );
   }
 
   const { data: tokenRows, error: tokenError } = await supabaseAdmin
     .from("ticket_tokens")
-    .select("token,ticket_id,expires_at")
+    .select("ticket_id,expires_at")
     .eq("token", token)
     .limit(1);
 
   if (tokenError) {
     console.error("ticket_tokens_lookup_failed", tokenError);
+    const code = "internal_error";
+    await logScanAttempt({ result: "REFUSED", reason: code ?? null, userId });
     return NextResponse.json(
-      { ok: false, error: "internal_error" },
+      { ok: false, code, message: "Internal error.", error: code },
       { status: 500 }
     );
   }
 
   const tokenRow = tokenRows?.[0];
   if (!tokenRow) {
+    const code = "token_not_found";
+    await logScanAttempt({ result: "REFUSED", reason: code ?? null, userId });
     return NextResponse.json(
-      { ok: false, error: "token_not_found" },
+      { ok: false, code, message: "Token not found.", error: code },
       { status: 404 }
     );
   }
 
   if (tokenRow.expires_at) {
     const expiresAt = new Date(tokenRow.expires_at).getTime();
-    if (Number.isFinite(expiresAt) && expiresAt < now.getTime()) {
+    if (Number.isFinite(expiresAt) && expiresAt < Date.now()) {
+      const code = "token_expired";
+      await logScanAttempt({ result: "REFUSED", reason: code ?? null, userId });
       return NextResponse.json(
-        { ok: false, error: "token_expired" },
-        { status: 410 }
+        { ok: false, code, message: "Token expired.", error: code },
+        { status: 401 }
       );
     }
   }
 
-  const { data: ticketRows, error: ticketError } = await supabaseAdmin
-    .from("tickets")
-    .select(
-      "id,owner_id,status,used_at,event_id,batch_id,events(title,start_at,city,venue_name,ticket_unlock_hours,organizer_id),ticket_batches(name)"
-    )
-    .eq("id", tokenRow.ticket_id)
-    .limit(1);
-
-  if (ticketError) {
-    console.error("ticket_lookup_failed", ticketError);
+  const ticketId = tokenRow.ticket_id ?? null;
+  if (!ticketId) {
+    const code = "ticket_not_found";
+    await logScanAttempt({ result: "REFUSED", reason: code ?? null, userId });
     return NextResponse.json(
-      { ok: false, error: "internal_error" },
-      { status: 500 }
-    );
-  }
-
-  const ticketRow = ticketRows?.[0];
-  if (!ticketRow) {
-    return NextResponse.json(
-      { ok: false, error: "ticket_not_found" },
+      { ok: false, code, message: "Ticket not found.", error: code },
       { status: 404 }
     );
   }
 
-  const eventRow = Array.isArray(ticketRow.events)
-    ? ticketRow.events[0]
-    : ticketRow.events;
-  const batchRow = Array.isArray(ticketRow.ticket_batches)
-    ? ticketRow.ticket_batches[0]
-    : ticketRow.ticket_batches;
+  const { data: ticket, error: ticketError } = await supabaseAdmin
+    .from("tickets")
+    .select("id,event_id,status,used_at,owner_id,events(organizer_id)")
+    .eq("id", ticketId)
+    .single();
 
-  // P0 security: staff can validate ONLY events of their organizer.
-  // Organizers can validate ONLY their own events.
-  const eventOrganizerId = (eventRow as any)?.organizer_id ?? null;
-  if (!eventOrganizerId) {
+  if (ticketError) {
+    console.error("ticket_lookup_failed", ticketError);
+    const code = "internal_error";
+    await logScanAttempt({ result: "REFUSED", reason: code ?? null, userId, ticketId });
     return NextResponse.json(
-      { ok: false, error: "event_missing_organizer" },
+      { ok: false, code, message: "Internal error.", error: code },
       { status: 500 }
     );
   }
 
-  if (role !== "ADMIN") {
-    if (role === "ORGANIZER" && eventOrganizerId !== userId) {
+  if (!ticket) {
+    const code = "ticket_not_found";
+    await logScanAttempt({ result: "REFUSED", reason: code ?? null, userId, ticketId });
+    return NextResponse.json(
+      { ok: false, code, message: "Ticket not found.", error: code },
+      { status: 404 }
+    );
+  }
+
+  const eventRow = Array.isArray(ticket.events)
+    ? ticket.events[0]
+    : ticket.events;
+  const eventOrganizerIdRaw = (eventRow as any)?.organizer_id ?? null;
+  const eventOrganizerId = eventOrganizerIdRaw
+    ? String(eventOrganizerIdRaw)
+    : null;
+
+  if (!eventOrganizerId) {
+    const code = "event_missing_organizer";
+    await logScanAttempt({
+      result: "REFUSED",
+      reason: code ?? null,
+      userId,
+      ticketId: ticket.id,
+      eventId: ticket.event_id ?? null,
+    });
+    return NextResponse.json(
+      { ok: false, code, message: "Event missing organizer.", error: code },
+      { status: 500 }
+    );
+  }
+
+  const staffOrganizerId = perm.staffOrganizerId
+    ? String(perm.staffOrganizerId)
+    : null;
+
+  if (perm.role !== "ADMIN") {
+    if (perm.role === "ORGANIZER" && eventOrganizerId !== userId) {
+      const code = "forbidden_event";
+      await logScanAttempt({
+        result: "REFUSED",
+        reason: code ?? null,
+        userId,
+        ticketId: ticket.id,
+        eventId: ticket.event_id ?? null,
+      });
       return NextResponse.json(
-        { ok: false, error: "forbidden_event" },
+        { ok: false, code, message: "Forbidden event.", error: code },
         { status: 403 }
       );
     }
-    if (role === "STAFF" && eventOrganizerId !== staffOrganizerId) {
+
+    if (perm.role === "STAFF" && eventOrganizerId !== staffOrganizerId) {
+      const code = "forbidden_event";
+      await logScanAttempt({
+        result: "REFUSED",
+        reason: code ?? null,
+        userId,
+        ticketId: ticket.id,
+        eventId: ticket.event_id ?? null,
+      });
       return NextResponse.json(
-        { ok: false, error: "forbidden_event" },
+        { ok: false, code, message: "Forbidden event.", error: code },
         { status: 403 }
       );
     }
   }
 
-  if (ticketRow.used_at) {
+  const status = String(ticket.status || "").toUpperCase();
+  if (status !== "ACTIVE") {
+    const code =
+      status === "USED" || ticket.used_at ? "already_used" : "not_scannable";
+    await logScanAttempt({
+      result: "REFUSED",
+      reason: code ?? null,
+      userId,
+      ticketId: ticket.id,
+      eventId: ticket.event_id ?? null,
+    });
     return NextResponse.json(
-      { ok: false, error: "already_used", used_at: ticketRow.used_at },
+      { ok: false, code, message: code, error: code },
       { status: 409 }
     );
   }
 
-  if (eventRow?.start_at) {
-    const unlockHours =
-      eventRow.ticket_unlock_hours ?? DEFAULT_UNLOCK_HOURS;
-    const unlockAtMs =
-      new Date(eventRow.start_at).getTime() - unlockHours * 60 * 60 * 1000;
-    if (Number.isFinite(unlockAtMs) && now.getTime() < unlockAtMs) {
-      const unlockAtIso = new Date(unlockAtMs).toISOString();
-      return NextResponse.json(
-        {
-          ok: false,
-          error: "ticket_locked",
-          unlock_at: unlockAtIso,
-          unlock_at_ts: unlockAtMs,
-        },
-        { status: 423 }
-      );
-    }
-  }
-
+  const nowIso = new Date().toISOString();
   const { data: updatedRows, error: updateError } = await supabaseAdmin
     .from("tickets")
-    .update({ used_at: nowIso, status: "USED" })
-    .eq("id", ticketRow.id)
-    .is("used_at", null)
-    .select("id,used_at")
+    .update({ status: "USED", used_at: nowIso })
+    .eq("id", ticket.id)
+    .eq("status", "ACTIVE")
+    .select("id")
     .limit(1);
 
   if (updateError) {
     console.error("ticket_update_failed", updateError);
+    const code = "internal_error";
+    await logScanAttempt({
+      result: "REFUSED",
+      reason: code ?? null,
+      userId,
+      ticketId: ticket.id,
+      eventId: ticket.event_id ?? null,
+    });
     return NextResponse.json(
-      { ok: false, error: "internal_error" },
+      { ok: false, code, message: "Internal error.", error: code },
       { status: 500 }
     );
   }
 
-  const updated = updatedRows?.[0];
-  if (!updated) {
-    const { data: usedRows, error: usedError } = await supabaseAdmin
-      .from("tickets")
-      .select("used_at")
-      .eq("id", ticketRow.id)
-      .limit(1);
-
-    if (usedError) {
-      console.error("ticket_used_lookup_failed", usedError);
-    }
-
+  if (!updatedRows?.[0]) {
+    const code = "already_used";
+    await logScanAttempt({
+      result: "REFUSED",
+      reason: code ?? null,
+      userId,
+      ticketId: ticket.id,
+      eventId: ticket.event_id ?? null,
+    });
     return NextResponse.json(
-      {
-        ok: false,
-        error: "already_used",
-        used_at: usedRows?.[0]?.used_at ?? null,
-      },
+      { ok: false, code, message: code, error: code },
       { status: 409 }
     );
   }
 
-  const { error: tokenCleanupError } = await supabaseAdmin
-    .from("ticket_tokens")
-    .delete()
-    .eq("ticket_id", ticketRow.id);
-
-  if (tokenCleanupError) {
-    console.error("ticket_token_cleanup_failed", tokenCleanupError);
-  }
+  const okCode = "ok";
+  await logScanAttempt({
+    result: "OK",
+    reason: okCode ?? null,
+    userId,
+    ticketId: ticket.id,
+    eventId: ticket.event_id ?? null,
+  });
 
   return NextResponse.json({
     ok: true,
-    ticket_id: ticketRow.id,
-    event: {
-      title: eventRow?.title ?? null,
-      start_at: eventRow?.start_at ?? null,
-      city: eventRow?.city ?? null,
-      venue_name: eventRow?.venue_name ?? null,
-      ticket_unlock_hours: eventRow?.ticket_unlock_hours ?? null,
-      organizer_id: (eventRow as any)?.organizer_id ?? null,
-    },
-    batch: {
-      id: ticketRow.batch_id ?? null,
-      name: batchRow?.name ?? null,
-    },
-    used_at: updated.used_at ?? nowIso,
+    code: "ok",
+    ticket_id: ticket.id,
+    event_id: ticket.event_id ?? null,
   });
 }

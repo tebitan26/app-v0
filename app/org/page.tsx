@@ -166,6 +166,12 @@ export default function OrgPage() {
           >
             Gérer le staff
           </Link>
+          <Link
+            href="/org/logs"
+            className="inline-flex rounded-xl border border-white/15 bg-white/5 px-5 py-3 font-medium hover:bg-white/10"
+          >
+            Logs &amp; Exports
+          </Link>
 
           <Link
             href="/org/events/new"
