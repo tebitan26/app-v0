@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { supabase } from "@/app/lib/supabaseClient";
 type ResaleRow = {
   id: string;
   ticket_id: string;
