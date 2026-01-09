@@ -148,17 +148,14 @@ export async function POST(req: Request) {
     );
   }
 
-  if (role === "ORGANIZER") {
-    if (eventOrganizerId !== userId) {
+  if (role !== "ADMIN") {
+    if (role === "ORGANIZER" && eventOrganizerId !== userId) {
       return NextResponse.json(
         { ok: false, error: "forbidden_event" },
         { status: 403 }
       );
     }
-  }
-
-  if (role === "STAFF") {
-    if (eventOrganizerId !== staffOrganizerId) {
+    if (role === "STAFF" && eventOrganizerId !== staffOrganizerId) {
       return NextResponse.json(
         { ok: false, error: "forbidden_event" },
         { status: 403 }

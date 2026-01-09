@@ -159,12 +159,21 @@ export default function OrgPage() {
           </p>
         </div>
 
-        <Link
-          href="/org/events/new"
-          className="inline-flex rounded-xl bg-[#7A3CFF] px-5 py-3 font-medium hover:opacity-90"
-        >
-          + Créer un événement
-        </Link>
+        <div className="flex items-center gap-3">
+          <Link
+            href="/org/staff"
+            className="inline-flex rounded-xl border border-white/15 bg-white/5 px-5 py-3 font-medium hover:bg-white/10"
+          >
+            Gérer le staff
+          </Link>
+
+          <Link
+            href="/org/events/new"
+            className="inline-flex rounded-xl bg-[#7A3CFF] px-5 py-3 font-medium hover:opacity-90"
+          >
+            + Créer un événement
+          </Link>
+        </div>
       </div>
 
       {err ? (
