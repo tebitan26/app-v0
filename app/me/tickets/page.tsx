@@ -53,9 +53,14 @@ export default function MyTicketsPage() {
   const [qrExp, setQrExp] = useState<Record<string, number | null>>({});
   const [qrError, setQrError] = useState<Record<string, string | null>>({});
   const [qrLoading, setQrLoading] = useState<Record<string, boolean>>({});
+  const [showStaffCode, setShowStaffCode] = useState<
+    Record<string, boolean>
+  >({});
+  const [copyStatus, setCopyStatus] = useState<Record<string, boolean>>({});
 
   const [nowTs, setNowTs] = useState(() => Date.now());
   const refreshIntervals = useRef<Record<string, number>>({});
+  const codeInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   // Load tickets
   useEffect(() => {
@@ -192,6 +197,30 @@ export default function MyTicketsPage() {
     }
   }, []);
 
+  function handleShowCode(ticketId: string) {
+    setShowStaffCode((prev) => ({ ...prev, [ticketId]: true }));
+    window.setTimeout(() => {
+      const input = codeInputRefs.current[ticketId];
+      if (input) {
+        input.focus();
+        input.select();
+      }
+    }, 0);
+  }
+
+  async function handleCopyCode(ticketId: string, code: string) {
+    if (!code) return;
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopyStatus((prev) => ({ ...prev, [ticketId]: true }));
+      window.setTimeout(() => {
+        setCopyStatus((prev) => ({ ...prev, [ticketId]: false }));
+      }, 1500);
+    } catch {
+      setCopyStatus((prev) => ({ ...prev, [ticketId]: false }));
+    }
+  }
+
   // Auto refresh QR every ~75s when token exists
   useEffect(() => {
     Object.entries(qrTokens).forEach(([ticketId, token]) => {
@@ -272,6 +301,8 @@ export default function MyTicketsPage() {
                 : null;
 
             const staffUrl = qrToken ? `/staff?token=${qrToken}` : null;
+            const showCode = showStaffCode[ticket.id] ?? false;
+            const copied = copyStatus[ticket.id] ?? false;
 
             return (
               <div key={ticket.id} className="rounded-2xl border border-white/10 bg-white/5 p-5">
@@ -314,17 +345,42 @@ export default function MyTicketsPage() {
                         <QRCodeCanvas value={staffUrl} size={120} bgColor="#0D001C" fgColor="#FFFFFF" />
                         <div className="space-y-2">
                           <p className="text-sm text-white/80">Scan requis pour entrée staff.</p>
-                          <Link
-                            href={staffUrl}
+                          <button
+                            type="button"
+                            onClick={() => handleShowCode(ticket.id)}
                             className="inline-flex items-center justify-center rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium hover:bg-white/10"
                           >
-                            Ouvrir staff
-                          </Link>
+                            Afficher le code pour le staff
+                          </button>
                           {secondsLeft !== null ? (
                             <p className="text-xs text-white/60">Expire dans {secondsLeft} sec</p>
                           ) : null}
                         </div>
                       </div>
+                      {showCode ? (
+                        <div className="rounded-xl border border-white/10 bg-black/20 p-3">
+                          <p className="text-xs text-white/60">
+                            Code de validation (à donner au staff)
+                          </p>
+                          <div className="mt-2 flex flex-wrap items-center gap-3">
+                            <input
+                              ref={(node) => {
+                                codeInputRefs.current[ticket.id] = node;
+                              }}
+                              value={qrToken}
+                              readOnly
+                              className="min-w-[220px] flex-1 rounded-xl border border-white/15 bg-black/40 px-3 py-2 font-mono text-xs text-white outline-none"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleCopyCode(ticket.id, qrToken)}
+                              className="inline-flex items-center justify-center rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-xs font-medium hover:bg-white/10"
+                            >
+                              {copied ? "Copié" : "Copier"}
+                            </button>
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
                   ) : (
                     <span>QR prêt (prochaine étape).</span>
