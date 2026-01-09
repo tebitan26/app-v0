@@ -2,8 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { supabase } from "../lib/supabaseClient";
-import { useSessionProfile } from "../lib/useSessionProfile";
+import { supabase } from "@/app/lib/supabaseClient";
+import { useSessionProfile } from "@/app/lib/useSessionProfile";
 
 type EventRow = {
   id: string;
