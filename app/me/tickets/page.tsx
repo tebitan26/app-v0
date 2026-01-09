@@ -10,6 +10,7 @@ type EventInfo = {
   city: string;
   venue_name: string | null;
   start_at: string;
+  end_at: string | null;
   ticket_unlock_hours: number | null;
 };
 
@@ -23,6 +24,7 @@ type TicketRow = {
   id: string;
   status: string;
   created_at: string;
+  used_at: string | null;
   event_id: string;
   batch_id: string | null;
   events: EventInfo | null;
@@ -53,6 +55,15 @@ export default function MyTicketsPage() {
   const [qrExp, setQrExp] = useState<Record<string, number | null>>({});
   const [qrError, setQrError] = useState<Record<string, string | null>>({});
   const [qrLoading, setQrLoading] = useState<Record<string, boolean>>({});
+  const [resaleLoading, setResaleLoading] = useState<Record<string, boolean>>(
+    {}
+  );
+  const [resaleError, setResaleError] = useState<Record<string, string | null>>(
+    {}
+  );
+  const [resaleByTicketId, setResaleByTicketId] = useState<
+    Record<string, string>
+  >({});
   const [showStaffCode, setShowStaffCode] = useState<
     Record<string, boolean>
   >({});
@@ -62,76 +73,96 @@ export default function MyTicketsPage() {
   const refreshIntervals = useRef<Record<string, number>>({});
   const codeInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
-  // Load tickets
-  useEffect(() => {
-    let mounted = true;
+  const loadTickets = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
 
-    (async () => {
-      setLoading(true);
-      setErr(null);
+    const { data: userData, error: userErr } = await supabase.auth.getUser();
 
-      const { data: userData, error: userErr } = await supabase.auth.getUser();
+    if (userErr) {
+      setErr(userErr.message);
+      setLoading(false);
+      return;
+    }
 
-      if (!mounted) return;
+    const user = userData?.user;
+    if (!user) {
+      setUserId(null);
+      setTickets([]);
+      setResaleByTicketId({});
+      setLoading(false);
+      return;
+    }
 
-      if (userErr) {
-        setErr(userErr.message);
-        setLoading(false);
-        return;
-      }
-
-      const user = userData?.user;
-      if (!user) {
-        setUserId(null);
-        setTickets([]);
-        setLoading(false);
-        return;
-      }
-
-      setUserId(user.id);
+    setUserId(user.id);
 
       const { data: tk, error: tkErr } = await supabase
         .from("tickets")
         .select(
-          "id,status,created_at,event_id,batch_id,events(title,city,venue_name,start_at,ticket_unlock_hours),ticket_batches(name,price_cents,currency)"
+          "id,status,created_at,used_at,event_id,batch_id,events(title,city,venue_name,start_at,end_at,ticket_unlock_hours),ticket_batches(name,price_cents,currency)"
         )
         .eq("owner_id", user.id)
         .order("created_at", { ascending: false });
 
-      if (!mounted) return;
-
-      if (tkErr) {
-        setErr(tkErr.message);
-        setTickets([]);
-        setLoading(false);
-        return;
-      }
-
-      const normalized: TicketRow[] = (tk ?? []).map((row: any) => {
-        const ev = Array.isArray(row.events) ? row.events[0] ?? null : row.events ?? null;
-        const bt = Array.isArray(row.ticket_batches)
-          ? row.ticket_batches[0] ?? null
-          : row.ticket_batches ?? null;
-
-        return {
-          id: row.id,
-          status: row.status,
-          created_at: row.created_at,
-          event_id: row.event_id,
-          batch_id: row.batch_id ?? null,
-          events: ev,
-          ticket_batches: bt,
-        };
-      });
-
-      setTickets(normalized);
+    if (tkErr) {
+      setErr(tkErr.message);
+      setTickets([]);
+      setResaleByTicketId({});
       setLoading(false);
-    })();
+      return;
+    }
 
+    const normalized: TicketRow[] = (tk ?? []).map((row: any) => {
+      const ev = Array.isArray(row.events) ? row.events[0] ?? null : row.events ?? null;
+      const bt = Array.isArray(row.ticket_batches)
+        ? row.ticket_batches[0] ?? null
+        : row.ticket_batches ?? null;
+
+      return {
+        id: row.id,
+        status: row.status,
+        created_at: row.created_at,
+        used_at: row.used_at ?? null,
+        event_id: row.event_id,
+        batch_id: row.batch_id ?? null,
+        events: ev,
+        ticket_batches: bt,
+      };
+    });
+
+    setTickets(normalized);
+
+    const ticketIds = normalized.map((ticket) => ticket.id);
+    if (ticketIds.length === 0) {
+      setResaleByTicketId({});
+      setLoading(false);
+      return;
+    }
+
+    const { data: resaleRows } = await supabase
+      .from("ticket_resales")
+      .select("id,ticket_id")
+      .eq("seller_id", user.id)
+      .eq("state", "OPEN")
+      .in("ticket_id", ticketIds);
+
+    const map: Record<string, string> = {};
+    (resaleRows ?? []).forEach((row: any) => {
+      if (row?.ticket_id && row?.id) map[row.ticket_id] = row.id;
+    });
+    setResaleByTicketId(map);
+    setLoading(false);
+  }, []);
+
+  // Load tickets
+  useEffect(() => {
+    let mounted = true;
+    if (!mounted) return;
+    loadTickets();
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [loadTickets]);
 
   // Tick for countdown
   useEffect(() => {
@@ -176,9 +207,13 @@ export default function MyTicketsPage() {
       }
 
       if (!res.ok) {
+        const errorCode = json?.error;
         setQrError((prev) => ({
           ...prev,
-          [ticketId]: json?.error ?? `Erreur QR (${res.status})`,
+          [ticketId]:
+            errorCode === "event_expired"
+              ? "Événement passé."
+              : errorCode ?? `Erreur QR (${res.status})`,
         }));
         return;
       }
@@ -221,6 +256,93 @@ export default function MyTicketsPage() {
     }
   }
 
+  async function handleResaleCreate(ticketId: string) {
+    setResaleLoading((prev) => ({ ...prev, [ticketId]: true }));
+    setResaleError((prev) => ({ ...prev, [ticketId]: null }));
+
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+
+      if (!accessToken) {
+        setResaleError((prev) => ({ ...prev, [ticketId]: "Non authentifié." }));
+        return;
+      }
+
+      const res = await fetch("/api/resale/create", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ ticket_id: ticketId }),
+      });
+
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setResaleError((prev) => ({
+          ...prev,
+          [ticketId]: payload?.error || "Erreur revente.",
+        }));
+        return;
+      }
+
+      setTickets((prev) =>
+        prev.map((ticket) =>
+          ticket.id === ticketId
+            ? { ...ticket, status: "EN_REVENTE" }
+            : ticket
+        )
+      );
+    } catch {
+      setResaleError((prev) => ({ ...prev, [ticketId]: "Erreur réseau." }));
+    } finally {
+      setResaleLoading((prev) => ({ ...prev, [ticketId]: false }));
+    }
+  }
+
+  async function handleResaleCancel(ticketId: string, resaleId: string) {
+    const confirmed = window.confirm("Confirmer le retrait ?");
+    if (!confirmed) return;
+
+    setResaleLoading((prev) => ({ ...prev, [ticketId]: true }));
+    setResaleError((prev) => ({ ...prev, [ticketId]: null }));
+
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+
+      if (!accessToken) {
+        setResaleError((prev) => ({ ...prev, [ticketId]: "Non authentifié." }));
+        return;
+      }
+
+      const res = await fetch("/api/resale/cancel", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ resale_id: resaleId }),
+      });
+
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setResaleError((prev) => ({
+          ...prev,
+          [ticketId]: payload?.error || "Erreur retrait.",
+        }));
+        return;
+      }
+
+      await loadTickets();
+    } catch {
+      setResaleError((prev) => ({ ...prev, [ticketId]: "Erreur réseau." }));
+    } finally {
+      setResaleLoading((prev) => ({ ...prev, [ticketId]: false }));
+    }
+  }
+
   // Auto refresh QR every ~75s when token exists
   useEffect(() => {
     Object.entries(qrTokens).forEach(([ticketId, token]) => {
@@ -250,6 +372,12 @@ export default function MyTicketsPage() {
       <div>
         <h1 className="text-3xl font-bold">Mes billets</h1>
         <p className="mt-2 text-white/70">Retrouve tous tes accès Sidetick au même endroit.</p>
+        <Link
+          href="/resale"
+          className="mt-4 inline-flex rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium hover:bg-white/10"
+        >
+          Voir la marketplace
+        </Link>
       </div>
 
       {err ? (
@@ -275,8 +403,34 @@ export default function MyTicketsPage() {
           Aucun billet trouvé pour le moment.
         </div>
       ) : (
-        <div className="grid gap-4">
-          {tickets.map((ticket) => {
+        <div className="space-y-6">
+          {(() => {
+            const activeTickets = tickets.filter((ticket) => {
+              const startAt = ticket.events?.start_at
+                ? new Date(ticket.events.start_at)
+                : null;
+              const endAt = ticket.events?.end_at
+                ? new Date(ticket.events.end_at)
+                : startAt
+                ? new Date(startAt.getTime() + 2 * 60 * 60 * 1000)
+                : null;
+              return !endAt || nowTs <= endAt.getTime();
+            });
+            const pastTickets = tickets.filter((ticket) => {
+              const startAt = ticket.events?.start_at
+                ? new Date(ticket.events.start_at)
+                : null;
+              const endAt = ticket.events?.end_at
+                ? new Date(ticket.events.end_at)
+                : startAt
+                ? new Date(startAt.getTime() + 2 * 60 * 60 * 1000)
+                : null;
+              return Boolean(endAt && nowTs > endAt.getTime());
+            });
+
+            const renderList = (list: TicketRow[]) => (
+              <div className="grid gap-4">
+                {list.map((ticket) => {
             const event = ticket.events;
             const batch = ticket.ticket_batches;
 
@@ -284,6 +438,11 @@ export default function MyTicketsPage() {
             const unlockLabel = formatUnlockLabel(unlockHours);
 
             const startAt = event?.start_at ? new Date(event.start_at) : null;
+            const endAt = event?.end_at
+              ? new Date(event.end_at)
+              : startAt
+              ? new Date(startAt.getTime() + 2 * 60 * 60 * 1000)
+              : null;
             const unlockAt = startAt
               ? new Date(startAt.getTime() - unlockHours * 60 * 60 * 1000)
               : null;
@@ -303,6 +462,15 @@ export default function MyTicketsPage() {
             const staffUrl = qrToken ? `/staff?token=${qrToken}` : null;
             const showCode = showStaffCode[ticket.id] ?? false;
             const copied = copyStatus[ticket.id] ?? false;
+            const resaleBusy = resaleLoading[ticket.id] ?? false;
+            const resaleErrorMessage = resaleError[ticket.id] ?? null;
+            const isResellable =
+              !ticket.used_at &&
+              (ticket.status === "VALID" || ticket.status === "ACTIVE");
+            const resaleId = resaleByTicketId[ticket.id];
+            const canCancelResale =
+              ticket.status === "EN_REVENTE" && Boolean(resaleId);
+            const isExpired = endAt ? nowTs > endAt.getTime() : false;
 
             return (
               <div key={ticket.id} className="rounded-2xl border border-white/10 bg-white/5 p-5">
@@ -333,11 +501,18 @@ export default function MyTicketsPage() {
                     >
                       {unlocked ? "UNLOCKED" : "LOCKED"}
                     </span>
+                    {isExpired ? (
+                      <span className="rounded-full border border-red-500/30 bg-red-500/10 px-3 py-1 text-xs font-semibold text-red-200">
+                        Événement terminé
+                      </span>
+                    ) : null}
                   </div>
                 </div>
 
                 <div className="mt-4 rounded-xl border border-white/10 bg-black/20 p-4 text-sm text-white/70">
-                  {!unlocked ? (
+                  {isExpired ? (
+                    <span>Billet expiré — revente et scan désactivés.</span>
+                  ) : !unlocked ? (
                     <span>QR disponible à {unlockLabel}.</span>
                   ) : qrToken && staffUrl ? (
                     <div className="space-y-3">
@@ -387,7 +562,7 @@ export default function MyTicketsPage() {
                   )}
                 </div>
 
-                {unlocked ? (
+                {unlocked && !isExpired ? (
                   <div className="mt-3 flex flex-wrap items-center gap-3">
                     <button
                       type="button"
@@ -398,6 +573,41 @@ export default function MyTicketsPage() {
                       {qrToken ? "Rafraîchir QR" : "Afficher QR"}
                     </button>
                     {qrErrorMessage ? <span className="text-sm text-red-200">{qrErrorMessage}</span> : null}
+                  </div>
+                ) : null}
+
+                {isResellable && !isExpired ? (
+                  <div className="mt-3 flex flex-wrap items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => handleResaleCreate(ticket.id)}
+                      disabled={resaleBusy}
+                      className="inline-flex items-center justify-center rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium hover:bg-white/10 disabled:opacity-60"
+                    >
+                      {resaleBusy ? "Mise en revente…" : "Mettre en revente"}
+                    </button>
+                    {resaleErrorMessage ? (
+                      <span className="text-sm text-red-200">{resaleErrorMessage}</span>
+                    ) : null}
+                  </div>
+                ) : null}
+                {canCancelResale ? (
+                  <div className="mt-3 flex flex-wrap items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => handleResaleCancel(ticket.id, resaleId)}
+                      disabled={resaleBusy}
+                      className="inline-flex items-center justify-center rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium hover:bg-white/10 disabled:opacity-60"
+                    >
+                      {resaleBusy
+                        ? "Retrait…"
+                        : isExpired
+                        ? "Retirer (forcé)"
+                        : "Retirer de la revente"}
+                    </button>
+                    {resaleErrorMessage ? (
+                      <span className="text-sm text-red-200">{resaleErrorMessage}</span>
+                    ) : null}
                   </div>
                 ) : null}
 
@@ -412,7 +622,35 @@ export default function MyTicketsPage() {
                 </div>
               </div>
             );
-          })}
+                })}
+              </div>
+            );
+
+            return (
+              <div className="space-y-6">
+                <div className="space-y-3">
+                  <h2 className="text-lg font-semibold">Tickets actifs</h2>
+                  {activeTickets.length === 0 ? (
+                    <div className="rounded-2xl border border-white/10 bg-white/5 p-5 text-white/70">
+                      Aucun ticket actif.
+                    </div>
+                  ) : (
+                    renderList(activeTickets)
+                  )}
+                </div>
+                <div className="space-y-3">
+                  <h2 className="text-lg font-semibold">Tickets passés</h2>
+                  {pastTickets.length === 0 ? (
+                    <div className="rounded-2xl border border-white/10 bg-white/5 p-5 text-white/70">
+                      Aucun ticket passé.
+                    </div>
+                  ) : (
+                    renderList(pastTickets)
+                  )}
+                </div>
+              </div>
+            );
+          })()}
         </div>
       )}
     </section>

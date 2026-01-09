@@ -48,6 +48,10 @@ export async function POST(req: Request) {
 
     const session = evt.data.object as Stripe.Checkout.Session;
 
+    if (session.metadata?.type === "resale") {
+      return new Response("ok", { status: 200 });
+    }
+
     const orderId = session.metadata?.order_id;
     const batchId = session.metadata?.batch_id;
     const buyerId = session.metadata?.buyer_id; // ✅ ajouté par Patch A

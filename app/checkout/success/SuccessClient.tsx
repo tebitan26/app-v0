@@ -25,11 +25,8 @@ export default function SuccessClient() {
           </div>
 
           <div className="flex-1">
-            <h1 className="text-3xl font-semibold tracking-tight">Paiement confirmé</h1>
+            <h1 className="text-3xl font-semibold tracking-tight">Achat confirmé</h1>
             <p className="mt-2 text-white/70">
-              Merci ! Ton paiement a bien été validé.
-            </p>
-            <p className="mt-1 text-white/70">
               Ton billet va apparaître dans <span className="text-white/90">Mes billets</span> d’ici quelques instants.
             </p>
 

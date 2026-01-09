@@ -51,15 +51,35 @@ export default function AuthNav() {
   // V0 rule: organizers CAN also access staff scan, staff cannot access organizer.
   const canSeeStaff = roleUpper === "STAFF" || roleUpper === "ADMIN" || roleUpper === "ORGANIZER";
 
+  const publicLinks = (
+    <>
+      <Link
+        href="/events"
+        className="rounded-xl border border-white/15 bg-white/5 px-3 py-1 text-xs text-white/80 hover:bg-white/10"
+      >
+        Events
+      </Link>
+      <Link
+        href="/marketplace"
+        className="rounded-xl border border-white/15 bg-white/5 px-3 py-1 text-xs text-white/80 hover:bg-white/10"
+      >
+        Marketplace
+      </Link>
+    </>
+  );
+
   // While loading, keep a stable placeholder to avoid layout jumps.
   // But if loading seems stuck, show Login rather than an infinite placeholder.
   if (loading && !effectiveEmail && !loadingTimedOut) {
     return (
-      <div
-        className="text-sm text-white/50 min-w-[220px] text-right"
-        aria-label="Chargement du profil"
-      >
-        …
+      <div className="flex items-center gap-3 text-sm">
+        {publicLinks}
+        <div
+          className="text-sm text-white/50 min-w-[80px] text-right"
+          aria-label="Chargement du profil"
+        >
+          …
+        </div>
       </div>
     );
   }
@@ -67,14 +87,19 @@ export default function AuthNav() {
   // Not logged in
   if (!effectiveEmail) {
     return (
-      <Link className="hover:text-white" href="/login">
-        Login
-      </Link>
+      <div className="flex items-center gap-3 text-sm">
+        {publicLinks}
+        <Link className="hover:text-white" href="/login">
+          Login
+        </Link>
+      </div>
     );
   }
 
   return (
     <div className="flex items-center gap-3 text-sm">
+      {publicLinks}
+
       {/* Identity (not clickable to avoid duplicate navigation) */}
       <div className="text-white/70" title={effectiveEmail}>
         {effectiveEmail} <span className="text-[#7A3CFF]">({effectiveRole ?? "?"})</span>

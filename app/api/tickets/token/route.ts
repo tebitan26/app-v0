@@ -94,7 +94,7 @@ export async function GET(req: Request) {
     // ------------------------------------------------------------
     const { data: ticket, error: ticketErr } = await supabaseAdmin
       .from("tickets")
-      .select("id,owner_id")
+      .select("id,owner_id,event_id,events(start_at)")
       .eq("id", ticketId)
       .single();
 
@@ -109,6 +109,16 @@ export async function GET(req: Request) {
 
     if ((ticket as any).owner_id !== authedUserId) {
       return NextResponse.json({ error: "forbidden" }, { status: 403 });
+    }
+
+    const eventRow = Array.isArray((ticket as any).events)
+      ? (ticket as any).events[0]
+      : (ticket as any).events;
+    const eventStartAt = eventRow?.start_at
+      ? new Date(eventRow.start_at)
+      : null;
+    if (eventStartAt && eventStartAt.getTime() < Date.now()) {
+      return NextResponse.json({ error: "event_expired" }, { status: 409 });
     }
 
     // ------------------------------------------------------------
