@@ -8,12 +8,39 @@ export default function AuthCallbackPage() {
   const router = useRouter();
 
   useEffect(() => {
-    // Supabase gère l’échange de token automatiquement via l’URL.
-    // On vérifie juste si on a une session, puis on redirige.
-    supabase.auth.getSession().then(({ data }) => {
-      if (data.session) router.replace("/events");
-      else router.replace("/login");
-    });
+    const run = async () => {
+      try {
+        // Handle both Supabase auth callback styles:
+        // - PKCE/code flow:   /auth/callback?code=...
+        // - Implicit/hash:    /auth/callback#access_token=...
+        const hasCode = typeof window !== "undefined" && window.location.search.includes("code=");
+        const hasHashToken =
+          typeof window !== "undefined" &&
+          (window.location.hash.includes("access_token=") || window.location.hash.includes("refresh_token="));
+
+        // Prefer code flow if present
+        if (hasCode && typeof (supabase.auth as any).exchangeCodeForSession === "function") {
+          await (supabase.auth as any).exchangeCodeForSession(window.location.search);
+        } else if (hasHashToken && typeof (supabase.auth as any).getSessionFromUrl === "function") {
+          // Implicit flow: consume the hash and store the session
+          await (supabase.auth as any).getSessionFromUrl({ storeSession: true });
+        }
+
+        // Security/cleanliness: remove tokens from the URL hash once consumed
+        if (typeof window !== "undefined" && window.location.hash) {
+          window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
+        }
+
+        const { data } = await supabase.auth.getSession();
+        if (data.session) router.replace("/events");
+        else router.replace("/login");
+      } catch (e) {
+        console.error("auth_callback_failed", e);
+        router.replace("/login?error=callback");
+      }
+    };
+
+    run();
   }, [router]);
 
   return (
