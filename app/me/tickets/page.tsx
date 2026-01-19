@@ -589,6 +589,9 @@ export default function MyTicketsPage() {
                     {resaleErrorMessage ? (
                       <span className="text-sm text-red-200">{resaleErrorMessage}</span>
                     ) : null}
+                    <p className="w-full text-xs text-white/60">
+                      La redistribution financière au revendeur sera traitée ultérieurement.
+                    </p>
                   </div>
                 ) : null}
                 {canCancelResale ? (

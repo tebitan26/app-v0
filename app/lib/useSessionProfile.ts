@@ -7,6 +7,7 @@ type Role = "FAN" | "ORGANIZER" | "STAFF" | "ADMIN";
 
 export function useSessionProfile() {
   const [loading, setLoading] = useState(true);
+  const [userId, setUserId] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [role, setRole] = useState<Role | null>(null);
 
@@ -20,6 +21,7 @@ export function useSessionProfile() {
 
       if (!isMounted) return;
 
+      setUserId(user?.id ?? null);
       setUserEmail(user?.email ?? null);
 
       if (!user) {
@@ -55,5 +57,5 @@ export function useSessionProfile() {
     };
   }, []);
 
-  return { loading, userEmail, role };
+  return { loading, userId, userEmail, role };
 }

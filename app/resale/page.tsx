@@ -156,6 +156,9 @@ export default function ResalePage() {
                     >
                       {buying[row.id] ? "Redirection…" : "Acheter"}
                     </button>
+                    <p className="text-xs text-white/60">
+                      La redistribution financière au revendeur sera traitée ultérieurement.
+                    </p>
                   </div>
                 </div>
               </div>
