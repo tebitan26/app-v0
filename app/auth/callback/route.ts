@@ -1,16 +1,20 @@
-import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
+import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 
-export async function GET(request: Request) {
+export async function GET(request: NextRequest) {
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
 
-  const requestCookies = await cookies();
+  // Si aucun code n'est présent, on renvoie vers /login avec une erreur explicite.
+  if (!code) {
+    const loginUrl = new URL("/login", request.url);
+    loginUrl.searchParams.set("error", "missing_code");
+    return NextResponse.redirect(loginUrl);
+  }
 
   // Prépare la réponse de redirection vers /me, sur laquelle nous allons
-  // réellement écrire les cookies de session Supabase.
-  const response = NextResponse.redirect(new URL("/me", url.origin));
+  // réellement écrire les cookies de session Supabase (httpOnly).
+  const response = NextResponse.redirect(new URL("/me", request.url));
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -18,14 +22,9 @@ export async function GET(request: Request) {
     {
       cookies: {
         getAll() {
-          return requestCookies.getAll();
+          return request.cookies.getAll();
         },
         setAll(cookiesToSet) {
-          console.log(
-            "callback: setAll cookies count =",
-            cookiesToSet.length
-          );
-
           cookiesToSet.forEach(({ name, value, options }) => {
             response.cookies.set(name, value, options);
           });
@@ -34,15 +33,13 @@ export async function GET(request: Request) {
     }
   );
 
-  if (code) {
-    const { error } = await supabase.auth.exchangeCodeForSession(code);
+  const { error } = await supabase.auth.exchangeCodeForSession(code);
 
-    if (error) {
-      // En cas d'erreur, on redirige simplement vers /login sans persister de session.
-      return NextResponse.redirect(new URL("/login?error=oauth", url.origin));
-    }
-
-    console.log("callback: exchangeCodeForSession ok");
+  if (error) {
+    // En cas d'erreur, on redirige simplement vers /login sans persister de session.
+    const loginUrl = new URL("/login", request.url);
+    loginUrl.searchParams.set("error", "oauth");
+    return NextResponse.redirect(loginUrl);
   }
 
   return response;
