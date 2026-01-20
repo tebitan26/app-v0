@@ -6,7 +6,11 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
 
-  const cookieStore = await cookies();
+  const requestCookies = await cookies();
+
+  // Prépare la réponse de redirection vers /me, sur laquelle nous allons
+  // réellement écrire les cookies de session Supabase.
+  const response = NextResponse.redirect(new URL("/me", url.origin));
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -14,11 +18,16 @@ export async function GET(request: Request) {
     {
       cookies: {
         getAll() {
-          return cookieStore.getAll();
+          return requestCookies.getAll();
         },
         setAll(cookiesToSet) {
+          console.log(
+            "callback: setAll cookies count =",
+            cookiesToSet.length
+          );
+
           cookiesToSet.forEach(({ name, value, options }) => {
-            cookieStore.set(name, value, options);
+            response.cookies.set(name, value, options);
           });
         },
       },
@@ -27,10 +36,14 @@ export async function GET(request: Request) {
 
   if (code) {
     const { error } = await supabase.auth.exchangeCodeForSession(code);
+
     if (error) {
+      // En cas d'erreur, on redirige simplement vers /login sans persister de session.
       return NextResponse.redirect(new URL("/login?error=oauth", url.origin));
     }
+
+    console.log("callback: exchangeCodeForSession ok");
   }
 
-  return NextResponse.redirect(new URL("/me", url.origin));
+  return response;
 }
