@@ -1,5 +1,6 @@
 import Stripe from "stripe";
 import { createClient } from "@supabase/supabase-js";
+import { getSiteUrl } from "@/app/lib/siteUrl";
 
 export const runtime = "nodejs";
 
@@ -109,10 +110,7 @@ export async function POST(req: Request) {
     }
 
     // 3) créer Stripe checkout session
-    const siteUrl =
-  process.env.NEXT_PUBLIC_SITE_URL ||
-  process.env.NEXT_PUBLIC_APP_URL ||
-  "http://localhost:3000";
+    const siteUrl = getSiteUrl();
     const eventId = event?.id ?? batch.event_id ?? null;
 
     const session = await stripe.checkout.sessions.create({

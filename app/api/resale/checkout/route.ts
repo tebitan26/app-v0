@@ -2,6 +2,7 @@ import Stripe from "stripe";
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/app/lib/supabaseAdmin";
 import { requireUser } from "@/app/org/staff/_utils";
+import { getSiteUrl } from "@/app/lib/siteUrl";
 
 export const runtime = "nodejs";
 
@@ -110,10 +111,7 @@ export async function POST(req: Request) {
     : ticket.events;
   const eventTitle = eventInfo?.title ?? "Ticket Sidetick";
 
-  const siteUrl =
-    process.env.NEXT_PUBLIC_SITE_URL ||
-    process.env.NEXT_PUBLIC_APP_URL ||
-    "http://localhost:3000";
+  const siteUrl = getSiteUrl();
 
   const { data: pendingRows, error: pendingError } = await supabaseAdmin
     .from("ticket_resales")

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "../lib/supabaseClient";
+import { getSiteUrl } from "../lib/siteUrl";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -19,44 +20,66 @@ export default function LoginPage() {
   }, [router]);
 
   async function loginWithGoogle() {
-    const redirectTo = `${window.location.origin}/auth/callback`;
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: { redirectTo },
-    });
-    if (error) {
+    if (status === "loading") return;
+    setStatus("loading");
+    setMessage("");
+
+    const redirectTo = `${getSiteUrl()}/auth/callback`;
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: { redirectTo },
+      });
+      if (error) {
+        setStatus("error");
+        setMessage(error.message);
+      }
+    } catch {
       setStatus("error");
-      setMessage(error.message);
+      setMessage("Erreur réseau, réessaie.");
+    } finally {
+      setStatus((prev) => (prev === "loading" ? "idle" : prev));
     }
   }
 
   async function sendMagicLink(e: React.FormEvent) {
     e.preventDefault();
-
-    const { data: sessionData } = await supabase.auth.getSession();
-    if (sessionData.session) {
-      router.replace("/events");
-      return;
-    }
+    if (status === "loading") return;
 
     setStatus("loading");
     setMessage("");
 
-    const redirectTo = `${window.location.origin}/auth/callback`;
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      if (sessionData.session) {
+        router.replace("/events");
+        setStatus("idle");
+        return;
+      }
 
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: { emailRedirectTo: redirectTo },
-    });
+      const redirectTo = `${getSiteUrl()}/auth/callback`;
 
-    if (error) {
+      const { error } = await supabase.auth.signInWithOtp({
+        email,
+        options: { emailRedirectTo: redirectTo },
+      });
+
+      if (error) {
+        setStatus("error");
+        setMessage(error.message);
+        return;
+      }
+
+      setStatus("sent");
+      setMessage(
+        "Lien envoyé ! Clique dans l’email pour te connecter (ou créer ton compte)."
+      );
+    } catch {
       setStatus("error");
-      setMessage(error.message);
-      return;
+      setMessage("Erreur réseau, réessaie.");
+    } finally {
+      setStatus((prev) => (prev === "loading" ? "idle" : prev));
     }
-
-    setStatus("sent");
-    setMessage("Lien envoyé ! Clique dans l’email pour te connecter (ou créer ton compte).");
   }
 
   return (
@@ -87,7 +110,13 @@ export default function LoginPage() {
           <label className="text-sm text-white/70">Email</label>
           <input
             value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            onChange={(e) => {
+              if (status === "error") {
+                setStatus("idle");
+                setMessage("");
+              }
+              setEmail(e.target.value);
+            }}
             type="email"
             required
             placeholder="ton@email.com"

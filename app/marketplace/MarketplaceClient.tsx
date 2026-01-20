@@ -39,20 +39,27 @@ export default function MarketplaceClient() {
       setLoading(true);
       setError(null);
 
-      const res = await fetch("/api/resale/list", { cache: "no-store" });
-      const payload = await res.json().catch(() => ({}));
+      try {
+        const res = await fetch("/api/resale/list", { cache: "no-store" });
+        const payload = await res.json().catch(() => ({}));
 
-      if (!mounted) return;
+        if (!mounted) return;
 
-      if (!res.ok) {
-        setError(payload?.error || "Erreur de chargement.");
+        if (!res.ok) {
+          setError(payload?.error || "Erreur de chargement.");
+          setRows([]);
+          return;
+        }
+
+        setRows((payload?.data ?? []) as ResaleRow[]);
+      } catch {
+        if (!mounted) return;
+        setError("Erreur réseau.");
         setRows([]);
+      } finally {
+        if (!mounted) return;
         setLoading(false);
-        return;
       }
-
-      setRows((payload?.data ?? []) as ResaleRow[]);
-      setLoading(false);
     }
 
     load();
@@ -140,7 +147,36 @@ export default function MarketplaceClient() {
 
       {error ? (
         <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-red-200">
-          {error}
+          <div>{error}</div>
+          <button
+            type="button"
+            onClick={() => {
+              if (loading) return;
+              const reload = async () => {
+                setLoading(true);
+                setError(null);
+                try {
+                  const res = await fetch("/api/resale/list", { cache: "no-store" });
+                  const payload = await res.json().catch(() => ({}));
+                  if (!res.ok) {
+                    setError(payload?.error || "Erreur de chargement.");
+                    setRows([]);
+                    return;
+                  }
+                  setRows((payload?.data ?? []) as ResaleRow[]);
+                } catch {
+                  setError("Erreur réseau.");
+                  setRows([]);
+                } finally {
+                  setLoading(false);
+                }
+              };
+              reload();
+            }}
+            className="mt-3 inline-flex items-center justify-center rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium text-white hover:bg-white/10"
+          >
+            Réessayer
+          </button>
         </div>
       ) : null}
 

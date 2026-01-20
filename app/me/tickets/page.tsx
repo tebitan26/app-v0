@@ -77,24 +77,25 @@ export default function MyTicketsPage() {
     setLoading(true);
     setErr(null);
 
-    const { data: userData, error: userErr } = await supabase.auth.getUser();
+    try {
+      const { data: userData, error: userErr } = await supabase.auth.getUser();
 
-    if (userErr) {
-      setErr(userErr.message);
-      setLoading(false);
-      return;
-    }
+      if (userErr) {
+        setErr(userErr.message || "Impossible de charger les billets.");
+        setTickets([]);
+        setResaleByTicketId({});
+        return;
+      }
 
-    const user = userData?.user;
-    if (!user) {
-      setUserId(null);
-      setTickets([]);
-      setResaleByTicketId({});
-      setLoading(false);
-      return;
-    }
+      const user = userData?.user;
+      if (!user) {
+        setUserId(null);
+        setTickets([]);
+        setResaleByTicketId({});
+        return;
+      }
 
-    setUserId(user.id);
+      setUserId(user.id);
 
       const { data: tk, error: tkErr } = await supabase
         .from("tickets")
@@ -104,54 +105,64 @@ export default function MyTicketsPage() {
         .eq("owner_id", user.id)
         .order("created_at", { ascending: false });
 
-    if (tkErr) {
-      setErr(tkErr.message);
+      if (tkErr) {
+        setErr(tkErr.message || "Impossible de charger les billets.");
+        setTickets([]);
+        setResaleByTicketId({});
+        return;
+      }
+
+      const normalized: TicketRow[] = (tk ?? []).map((row: any) => {
+        const ev = Array.isArray(row.events) ? row.events[0] ?? null : row.events ?? null;
+        const bt = Array.isArray(row.ticket_batches)
+          ? row.ticket_batches[0] ?? null
+          : row.ticket_batches ?? null;
+
+        return {
+          id: row.id,
+          status: row.status,
+          created_at: row.created_at,
+          used_at: row.used_at ?? null,
+          event_id: row.event_id,
+          batch_id: row.batch_id ?? null,
+          events: ev,
+          ticket_batches: bt,
+        };
+      });
+
+      setTickets(normalized);
+
+      const ticketIds = normalized.map((ticket) => ticket.id);
+      if (ticketIds.length === 0) {
+        setResaleByTicketId({});
+        return;
+      }
+
+      const { data: resaleRows, error: resaleErr } = await supabase
+        .from("ticket_resales")
+        .select("id,ticket_id")
+        .eq("seller_id", user.id)
+        .eq("state", "OPEN")
+        .in("ticket_id", ticketIds);
+
+      if (resaleErr) {
+        setErr(resaleErr.message || "Impossible de charger les billets.");
+        setResaleByTicketId({});
+        return;
+      }
+
+      const map: Record<string, string> = {};
+      (resaleRows ?? []).forEach((row: any) => {
+        if (row?.ticket_id && row?.id) map[row.ticket_id] = row.id;
+      });
+      setResaleByTicketId(map);
+    } catch {
+      setErr("Impossible de charger les billets.");
       setTickets([]);
       setResaleByTicketId({});
+    } finally {
       setLoading(false);
-      return;
     }
-
-    const normalized: TicketRow[] = (tk ?? []).map((row: any) => {
-      const ev = Array.isArray(row.events) ? row.events[0] ?? null : row.events ?? null;
-      const bt = Array.isArray(row.ticket_batches)
-        ? row.ticket_batches[0] ?? null
-        : row.ticket_batches ?? null;
-
-      return {
-        id: row.id,
-        status: row.status,
-        created_at: row.created_at,
-        used_at: row.used_at ?? null,
-        event_id: row.event_id,
-        batch_id: row.batch_id ?? null,
-        events: ev,
-        ticket_batches: bt,
-      };
-    });
-
-    setTickets(normalized);
-
-    const ticketIds = normalized.map((ticket) => ticket.id);
-    if (ticketIds.length === 0) {
-      setResaleByTicketId({});
-      setLoading(false);
-      return;
-    }
-
-    const { data: resaleRows } = await supabase
-      .from("ticket_resales")
-      .select("id,ticket_id")
-      .eq("seller_id", user.id)
-      .eq("state", "OPEN")
-      .in("ticket_id", ticketIds);
-
-    const map: Record<string, string> = {};
-    (resaleRows ?? []).forEach((row: any) => {
-      if (row?.ticket_id && row?.id) map[row.ticket_id] = row.id;
-    });
-    setResaleByTicketId(map);
-    setLoading(false);
   }, []);
 
   // Load tickets
@@ -382,7 +393,14 @@ export default function MyTicketsPage() {
 
       {err ? (
         <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-red-200">
-          {err}
+          <div>{err}</div>
+          <button
+            type="button"
+            onClick={loadTickets}
+            className="mt-3 inline-flex items-center justify-center rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium text-white hover:bg-white/10"
+          >
+            Réessayer
+          </button>
         </div>
       ) : null}
 
