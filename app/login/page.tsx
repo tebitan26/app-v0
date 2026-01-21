@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "../lib/supabaseClient";
 import { getSiteUrl } from "../lib/siteUrl";
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [email, setEmail] = useState("");
   const [status, setStatus] = useState<"idle" | "loading" | "sent" | "error">(
     "idle"
@@ -14,10 +15,35 @@ export default function LoginPage() {
   const [message, setMessage] = useState("");
 
   useEffect(() => {
+    let mounted = true;
+
     supabase.auth.getSession().then(({ data }) => {
+      if (!mounted) return;
       if (data.session) router.replace("/events");
     });
+
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session) {
+        router.replace("/events");
+        router.refresh();
+      }
+    });
+
+    return () => {
+      mounted = false;
+      sub.subscription.unsubscribe();
+    };
   }, [router]);
+
+  useEffect(() => {
+    const error = searchParams.get("error");
+    if (error === "missing_code" || error === "oauth") {
+      setStatus("error");
+      setMessage(
+        "La connexion a échoué. Réessaie de te connecter ou contacte le support."
+      );
+    }
+  }, [searchParams]);
 
   async function loginWithGoogle() {
     if (status === "loading") return;
@@ -57,11 +83,11 @@ export default function LoginPage() {
         return;
       }
 
-      const redirectTo = `${getSiteUrl()}/auth/callback`;
+      const emailRedirectTo = `${getSiteUrl()}/auth/callback`;
 
       const { error } = await supabase.auth.signInWithOtp({
         email,
-        options: { emailRedirectTo: redirectTo },
+        options: { emailRedirectTo },
       });
 
       if (error) {
@@ -107,8 +133,10 @@ export default function LoginPage() {
 
       <form onSubmit={sendMagicLink} className="mt-8 space-y-4">
         <div>
-          <label className="text-sm text-white/70">Email</label>
+          <label htmlFor="email" className="text-sm text-white/70">Email</label>
           <input
+            id="email"
+            name="email"
             value={email}
             onChange={(e) => {
               if (status === "error") {

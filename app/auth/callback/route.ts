@@ -14,7 +14,7 @@ export async function GET(request: NextRequest) {
 
   // Prépare la réponse de redirection vers /me, sur laquelle nous allons
   // réellement écrire les cookies de session Supabase (httpOnly).
-  const response = NextResponse.redirect(new URL("/me", request.url));
+  const response = NextResponse.redirect(new URL("/events", request.url));
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,

@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { createServerClient } from "@supabase/ssr";
 
 function isPrivatePath(pathname: string) {
   return (
@@ -25,36 +24,20 @@ function applyNoStoreHeaders(response: NextResponse) {
   response.headers.set("Pragma", "no-cache");
 }
 
-export async function middleware(request: NextRequest) {
-  const response = NextResponse.next();
+export async function proxy(request: NextRequest) {
+  const pathname = request.nextUrl.pathname;
 
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "",
-    {
-      cookies: {
-        getAll() {
-          return request.cookies.getAll().map((cookie) => ({
-            name: cookie.name,
-            value: cookie.value,
-          }));
-        },
-        setAll(cookies) {
-          cookies.forEach((cookie) => {
-            response.cookies.set(cookie.name, cookie.value, cookie.options);
-          });
-        },
-      },
-    }
-  );
-
-  try {
-    await supabase.auth.getUser();
-  } catch (err) {
-    console.error("supabase_middleware_refresh_failed", err);
+  if (pathname.startsWith("/_next") || pathname === "/favicon.ico") {
+    return NextResponse.next();
   }
 
-  if (isPrivatePath(request.nextUrl.pathname)) {
+  if (pathname.startsWith("/auth/callback")) {
+    return NextResponse.next();
+  }
+
+  const response = NextResponse.next();
+
+  if (isPrivatePath(pathname)) {
     applyNoStoreHeaders(response);
   }
 
