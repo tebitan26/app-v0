@@ -12,9 +12,12 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(loginUrl);
   }
 
-  // Prépare la réponse de redirection vers /me, sur laquelle nous allons
-  // réellement écrire les cookies de session Supabase (httpOnly).
-  const response = NextResponse.redirect(new URL("/events", request.url));
+  // Prépare la réponse de redirection vers /events avec paramètres anti-cache
+  // pour forcer une navigation "fresh" après OAuth.
+  const redirectUrl = new URL("/events", request.url);
+  redirectUrl.searchParams.set("fromAuth", "1");
+  redirectUrl.searchParams.set("t", Date.now().toString());
+  const response = NextResponse.redirect(redirectUrl, { status: 303 });
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -41,6 +44,15 @@ export async function GET(request: NextRequest) {
     loginUrl.searchParams.set("error", "oauth");
     return NextResponse.redirect(loginUrl);
   }
+
+  // Headers stricts no-store pour éviter le cache RSC/prefetch
+  response.headers.set(
+    "Cache-Control",
+    "private, no-store, max-age=0, must-revalidate"
+  );
+  response.headers.set("CDN-Cache-Control", "private, no-store");
+  response.headers.set("Vercel-CDN-Cache-Control", "private, no-store");
+  response.headers.set("Pragma", "no-cache");
 
   return response;
 }

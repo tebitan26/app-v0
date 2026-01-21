@@ -1,8 +1,10 @@
 "use client";
 export const dynamic = "force-dynamic";
+import { Suspense } from "react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
+import EventsCleanUrl from "./EventsCleanUrl";
 
 type EventRow = {
   id: string;
@@ -39,11 +41,15 @@ export default function EventsPage() {
   }, []);
 
   return (
-    <section className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold">Événements</h1>
-        <p className="mt-2 text-white/70">Découvre les événements disponibles.</p>
-      </div>
+    <>
+      <Suspense fallback={null}>
+        <EventsCleanUrl />
+      </Suspense>
+      <section className="space-y-6">
+        <div>
+          <h1 className="text-3xl font-bold">Événements</h1>
+          <p className="mt-2 text-white/70">Découvre les événements disponibles.</p>
+        </div>
 
       {err ? (
         <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-red-200">
@@ -77,6 +83,7 @@ export default function EventsPage() {
           ))}
         </div>
       )}
-    </section>
+      </section>
+    </>
   );
 }
