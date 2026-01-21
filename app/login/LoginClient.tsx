@@ -1,14 +1,15 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "../lib/supabaseClient";
 import { getSiteUrl } from "../lib/siteUrl";
 
 type LoginError = "missing_code" | "oauth" | null;
 
-export default function LoginClient({ initialError }: { initialError?: LoginError }) {
+export default function LoginClient() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [email, setEmail] = useState("");
   const [status, setStatus] = useState<"idle" | "loading" | "sent" | "error">(
     "idle"
@@ -37,13 +38,16 @@ export default function LoginClient({ initialError }: { initialError?: LoginErro
   }, [router]);
 
   useEffect(() => {
-    if (initialError === "missing_code" || initialError === "oauth") {
+    const errorParam = searchParams.get("error");
+    const error: LoginError = errorParam === "missing_code" || errorParam === "oauth" ? errorParam : null;
+    
+    if (error === "missing_code" || error === "oauth") {
       setStatus("error");
       setMessage(
         "La connexion a échoué. Réessaie de te connecter ou contacte le support."
       );
     }
-  }, [initialError]);
+  }, [searchParams]);
 
   async function loginWithGoogle() {
     if (status === "loading") return;

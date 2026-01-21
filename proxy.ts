@@ -10,7 +10,10 @@ function isPrivatePath(pathname: string) {
     pathname === "/staff" ||
     pathname.startsWith("/staff/") ||
     pathname === "/organisateur" ||
-    pathname.startsWith("/organisateur/")
+    pathname.startsWith("/organisateur/") ||
+    pathname === "/events" ||
+    pathname.startsWith("/events/") ||
+    pathname === "/login"
   );
 }
 
