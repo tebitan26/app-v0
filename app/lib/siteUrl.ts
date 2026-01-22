@@ -4,6 +4,10 @@ export function getSiteUrl(): string {
     return url.endsWith("/") ? url.slice(0, -1) : url;
   }
 
+  if (typeof window !== "undefined") {
+    return window.location.origin;
+  }
+
   if (process.env.VERCEL_URL) {
     return `https://${process.env.VERCEL_URL}`;
   }
