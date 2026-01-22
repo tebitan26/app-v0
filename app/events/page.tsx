@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 import { Suspense } from "react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { supabase } from "../lib/supabaseClient";
 import EventsCleanUrl from "./EventsCleanUrl";
 
@@ -15,9 +16,21 @@ type EventRow = {
 };
 
 export default function EventsPage() {
+  const searchParams = useSearchParams();
   const [events, setEvents] = useState<EventRow[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // Vérifier la session au montage, surtout après callback OAuth
+  useEffect(() => {
+    const fromAuth = searchParams.get("fromAuth");
+    if (fromAuth === "1") {
+      // Force une vérification de session après callback OAuth
+      supabase.auth.getSession().then(() => {
+        // La session devrait être détectée via les cookies maintenant
+      });
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     async function load() {
