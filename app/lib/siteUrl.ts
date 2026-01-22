@@ -1,5 +1,12 @@
 export function getSiteUrl(): string {
-  const raw = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
+  if (process.env.NEXT_PUBLIC_SITE_URL) {
+    const url = process.env.NEXT_PUBLIC_SITE_URL;
+    return url.endsWith("/") ? url.slice(0, -1) : url;
+  }
 
-  return raw.endsWith("/") ? raw.slice(0, -1) : raw;
+  if (process.env.VERCEL_URL) {
+    return `https://${process.env.VERCEL_URL}`;
+  }
+
+  return "http://localhost:3000";
 }
