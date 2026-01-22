@@ -12,9 +12,24 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(loginUrl);
   }
 
-  // Prépare la réponse de redirection vers /events
-  const redirectUrl = new URL("/events", request.url);
-  const response = NextResponse.redirect(redirectUrl, { status: 303 });
+  // Deep-link aware redirect:
+  // - next: where to send the user after auth (internal path like /events/123)
+  // - intent=buy: tells the destination page to resume the purchase flow
+  // - batchId: correlates the pre-auth "buy intent" created on the event page
+  const nextRaw = url.searchParams.get("next") || "/events";
+  const intent = url.searchParams.get("intent");
+  const batchId = url.searchParams.get("batchId");
+  const safeNext =
+    nextRaw.startsWith("/") && !nextRaw.startsWith("//") ? nextRaw : "/events";
+  const origin = new URL(request.url).origin;
+
+  // Keep existing query on the destination, then append our markers
+  const destinationUrl = new URL(safeNext, origin);
+  destinationUrl.searchParams.set("fromAuth", "1");
+  if (intent === "buy") destinationUrl.searchParams.set("autoBuy", "1");
+  if (batchId) destinationUrl.searchParams.set("batchId", batchId);
+
+  const response = NextResponse.redirect(destinationUrl, { status: 303 });
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,

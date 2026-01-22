@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
-import { useParams } from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "../../lib/supabaseClient";
 
 type EventRow = {
@@ -31,6 +31,9 @@ export default function FanEventPage() {
     const raw = (params as any)?.id;
     return Array.isArray(raw) ? raw[0] : (raw as string | undefined);
   }, [params]);
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const autoBuyTriggeredRef = useRef<string | null>(null);
 
   const [event, setEvent] = useState<EventRow | null>(null);
   const [batches, setBatches] = useState<BatchRow[]>([]);
@@ -75,6 +78,44 @@ export default function FanEventPage() {
     })();
   }, [eventId]);
 
+  // Auto-reprendre l'achat après un retour de /login (OAuth / magic link)
+  useEffect(() => {
+    const autoBuy = searchParams.get("autoBuy") === "1";
+    const batchId = searchParams.get("batchId");
+
+    // If there's no autoBuy intent, nothing to do.
+    if (!autoBuy || !batchId) return;
+
+    // Prevent double-trigger across re-renders.
+    if (autoBuyTriggeredRef.current === batchId) return;
+    autoBuyTriggeredRef.current = batchId;
+
+    (async () => {
+      try {
+        // Ensure we have a session first (cookies should already be set by /auth/callback).
+        const { data: sessionData } = await supabase.auth.getSession();
+        const token = sessionData?.session?.access_token;
+
+        // If not logged in yet, keep the URL as-is so handleBuy can send the user back to login
+        // while preserving the intent and batchId.
+        if (!token) return;
+
+        // Clean the URL so refresh doesn't re-trigger autoBuy.
+        const clean = new URL(window.location.href);
+        clean.searchParams.delete("autoBuy");
+        clean.searchParams.delete("batchId");
+        clean.searchParams.delete("fromAuth");
+        router.replace(`${clean.pathname}${clean.search}`);
+
+        // Trigger checkout.
+        await handleBuy(batchId);
+      } catch (e: any) {
+        setErr(e?.message ?? "Erreur auto-achat");
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, router]);
+
   async function handleBuy(batchId: string) {
     try {
       setErr(null);
@@ -83,14 +124,43 @@ export default function FanEventPage() {
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData?.session?.access_token;
 
+      // Extra safety: validate that we actually have a user.
+      // In some edge cases (stale storage / missing refresh token), getSession can be non-null
+      // but the session isn't usable server-side.
+      const { data: userData, error: userErr } = await supabase.auth.getUser();
+
+      // Not logged in (or session not valid): send to /login and come back to this event page after auth
+      if (!token || userErr || !userData?.user) {
+        // Clean up any broken client state so we don't loop on invalid tokens
+        await supabase.auth.signOut();
+
+        const nextUrl = `${window.location.pathname}${window.location.search}`;
+        const loginUrl = `/login?next=${encodeURIComponent(
+          nextUrl
+        )}&intent=buy&batchId=${encodeURIComponent(batchId)}`;
+        router.push(loginUrl);
+        return;
+      }
+
       const res = await fetch("/api/stripe/checkout", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({ batchId }),
       });
+
+      // If the API says we're not authorized, treat it like "not logged in" and resume after login.
+      if (res.status === 401) {
+        await supabase.auth.signOut();
+        const nextUrl = `${window.location.pathname}${window.location.search}`;
+        const loginUrl = `/login?next=${encodeURIComponent(
+          nextUrl
+        )}&intent=buy&batchId=${encodeURIComponent(batchId)}`;
+        router.push(loginUrl);
+        return;
+      }
 
       const json = await res.json();
 

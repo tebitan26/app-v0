@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "../lib/supabaseClient";
 import { getSiteUrl } from "../lib/siteUrl";
@@ -16,18 +16,56 @@ export default function LoginClient() {
   );
   const [message, setMessage] = useState("");
 
+  // Deep-link support: after login, bring the user back to where they came from.
+  // Example: /login?next=/events/<id>&intent=buy
+  const rawNextParam = searchParams.get("next") || "/events";
+  const intentParam = searchParams.get("intent");
+  const batchIdParam = searchParams.get("batchId");
+
+  // Security: prevent open-redirects. We only accept internal paths.
+  const nextPath = useMemo(() => {
+    if (!rawNextParam) return "/events";
+    // Accept only internal paths ("/...") and reject protocol/host inputs.
+    if (rawNextParam.startsWith("/") && !rawNextParam.startsWith("//")) {
+      return rawNextParam;
+    }
+    return "/events";
+  }, [rawNextParam]);
+
+  const buildPostLoginRedirect = useCallback((): string => {
+    // `nextPath` is expected to be an internal path like "/events/xyz".
+    const base = getSiteUrl();
+    const u = new URL(nextPath, base);
+
+    // We use these flags so destination pages can refresh state / auto-run actions.
+    u.searchParams.set("fromAuth", "1");
+    if (intentParam === "buy") u.searchParams.set("autoBuy", "1");
+    if (batchIdParam) u.searchParams.set("batchId", batchIdParam);
+
+    return `${u.pathname}${u.search}`;
+  }, [nextPath, intentParam, batchIdParam]);
+
+  const buildCallbackUrl = useCallback((): string => {
+    const cb = new URL("/auth/callback", getSiteUrl());
+    // Preserve deep-link info through the OAuth/magic-link callback
+    cb.searchParams.set("next", nextPath);
+    if (intentParam) cb.searchParams.set("intent", intentParam);
+    if (batchIdParam) cb.searchParams.set("batchId", batchIdParam);
+    return cb.toString();
+  }, [nextPath, intentParam, batchIdParam]);
+
   useEffect(() => {
     let mounted = true;
 
     supabase.auth.getSession().then(({ data }) => {
       if (!mounted) return;
-      if (data.session) router.replace("/events");
+      if (data.session) router.replace(buildPostLoginRedirect());
     });
 
     const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session) {
-        router.replace("/events");
-        router.refresh();
+        router.replace(buildPostLoginRedirect());
+        // No need for router.refresh() here; destination pages handle fromAuth/autoBuy.
       }
     });
 
@@ -35,7 +73,7 @@ export default function LoginClient() {
       mounted = false;
       sub.subscription.unsubscribe();
     };
-  }, [router]);
+  }, [router, buildPostLoginRedirect]);
 
   useEffect(() => {
     const errorParam = searchParams.get("error");
@@ -54,7 +92,7 @@ export default function LoginClient() {
     setStatus("loading");
     setMessage("");
 
-    const redirectTo = `${getSiteUrl()}/auth/callback`;
+    const redirectTo = buildCallbackUrl();
     try {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
@@ -85,12 +123,12 @@ export default function LoginClient() {
     try {
       const { data: sessionData } = await supabase.auth.getSession();
       if (sessionData.session) {
-        router.replace("/events");
+        router.replace(buildPostLoginRedirect());
         setStatus("idle");
         return;
       }
 
-      const emailRedirectTo = `${getSiteUrl()}/auth/callback`;
+      const emailRedirectTo = buildCallbackUrl();
 
       const { error } = await supabase.auth.signInWithOtp({
         email,
@@ -120,6 +158,11 @@ export default function LoginClient() {
       <h1 className="text-3xl font-bold">Connexion</h1>
       <p className="mt-3 text-white/80">
         Entre ton email : si tu as déjà un compte, tu te connectes. Sinon, on crée ton compte automatiquement.
+        {intentParam === "buy" ? (
+          <span className="block mt-2 text-white/70">
+            Une fois connecté, on te ramène automatiquement pour finaliser ton achat.
+          </span>
+        ) : null}
       </p>
 
       <div className="mt-6 space-y-3">
