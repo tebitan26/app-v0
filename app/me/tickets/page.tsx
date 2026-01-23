@@ -45,6 +45,101 @@ function formatTicketStatus(status: string) {
   return s || "UNKNOWN";
 }
 
+function isUsedTicket(t: TicketRow) {
+  const s = (t.status || "").toUpperCase();
+  return Boolean(t.used_at) || s === "USED";
+}
+
+function isResaleTicket(t: TicketRow, resaleByTicketId: Record<string, string>) {
+  const s = (t.status || "").toUpperCase();
+  return s === "EN_REVENTE" || Boolean(resaleByTicketId[t.id]);
+}
+
+function isCancelledTicket(t: TicketRow) {
+  const s = (t.status || "").toUpperCase();
+  return s === "CANCELLED" || s === "CANCELED";
+}
+
+function computeEventTimes(event: EventInfo | null) {
+  const startAt = event?.start_at ? new Date(event.start_at) : null;
+  const endAt = event?.end_at
+    ? new Date(event.end_at)
+    : startAt
+    ? new Date(startAt.getTime() + 2 * 60 * 60 * 1000)
+    : null;
+  return { startAt, endAt };
+}
+
+// Countdown: Mois/Jours si >= 24h, sinon Heures/Minutes
+function formatCountdownToStart(
+  startAtIso: string | null | undefined,
+  nowTs: number
+) {
+  if (!startAtIso) return null;
+  const start = new Date(startAtIso);
+  if (Number.isNaN(start.getTime())) return null;
+
+  const diffMs = start.getTime() - nowTs;
+  if (diffMs <= 0) return "En cours";
+
+  const diffMin = Math.floor(diffMs / 60000);
+  const diffHr = Math.floor(diffMin / 60);
+
+  if (diffHr < 24) {
+    const h = diffHr;
+    const m = diffMin % 60;
+    return `${h}h ${String(m).padStart(2, "0")}m`;
+  }
+
+  // mois/jours (approx calendaire)
+  let months = 0;
+  const cursor = new Date(nowTs);
+  while (true) {
+    const next = new Date(cursor.getTime());
+    next.setMonth(next.getMonth() + 1);
+    if (next.getTime() <= start.getTime()) {
+      months += 1;
+      cursor.setMonth(cursor.getMonth() + 1);
+    } else {
+      break;
+    }
+    if (months > 60) break;
+  }
+  const remainingMs = start.getTime() - cursor.getTime();
+  const days = Math.floor(remainingMs / (24 * 60 * 60 * 1000));
+
+  if (months > 0) return `${months} mois ${days} j`;
+  return `${days} j`;
+}
+
+type TicketGroup = {
+  event_id: string;
+  event: EventInfo | null;
+  tickets: TicketRow[];
+};
+
+function groupTicketsByEvent(list: TicketRow[]): TicketGroup[] {
+  const map = new Map<string, TicketGroup>();
+  for (const t of list) {
+    const key = t.event_id || "unknown";
+    const existing = map.get(key);
+    if (existing) {
+      existing.tickets.push(t);
+      if (!existing.event && t.events) existing.event = t.events;
+    } else {
+      map.set(key, { event_id: key, event: t.events ?? null, tickets: [t] });
+    }
+  }
+
+  const arr = Array.from(map.values());
+  arr.sort((a, b) => {
+    const da = a.event?.start_at ? new Date(a.event.start_at).getTime() : 0;
+    const db = b.event?.start_at ? new Date(b.event.start_at).getTime() : 0;
+    return da - db;
+  });
+  return arr;
+}
+
 export default function MyTicketsPage() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -64,10 +159,15 @@ export default function MyTicketsPage() {
   const [resaleByTicketId, setResaleByTicketId] = useState<
     Record<string, string>
   >({});
-  const [showStaffCode, setShowStaffCode] = useState<
-    Record<string, boolean>
-  >({});
+  const [showStaffCode, setShowStaffCode] = useState<Record<string, boolean>>(
+    {}
+  );
   const [copyStatus, setCopyStatus] = useState<Record<string, boolean>>({});
+
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
+  const toggleGroup = (key: string) => {
+    setOpenGroups((prev) => ({ ...prev, [key]: !(prev[key] ?? true) }));
+  };
 
   const [nowTs, setNowTs] = useState(() => Date.now());
   const refreshIntervals = useRef<Record<string, number>>({});
@@ -113,7 +213,9 @@ export default function MyTicketsPage() {
       }
 
       const normalized: TicketRow[] = (tk ?? []).map((row: any) => {
-        const ev = Array.isArray(row.events) ? row.events[0] ?? null : row.events ?? null;
+        const ev = Array.isArray(row.events)
+          ? row.events[0] ?? null
+          : row.events ?? null;
         const bt = Array.isArray(row.ticket_batches)
           ? row.ticket_batches[0] ?? null
           : row.ticket_batches ?? null;
@@ -187,7 +289,8 @@ export default function MyTicketsPage() {
 
     try {
       // 1) Get session (sometimes null right after login)
-      let { data: sessionData, error: sessionErr } = await supabase.auth.getSession();
+      let { data: sessionData, error: sessionErr } =
+        await supabase.auth.getSession();
       let accessToken = sessionData?.session?.access_token ?? null;
 
       // 2) If missing, try refreshSession once
@@ -203,12 +306,15 @@ export default function MyTicketsPage() {
         return;
       }
 
-      const res = await fetch(`/api/tickets/token?ticketId=${encodeURIComponent(ticketId)}`, {
-        method: "GET",
-        headers: { Authorization: `Bearer ${accessToken}` },
-        credentials: "same-origin",
-        cache: "no-store",
-      });
+      const res = await fetch(
+        `/api/tickets/token?ticketId=${encodeURIComponent(ticketId)}`,
+        {
+          method: "GET",
+          headers: { Authorization: `Bearer ${accessToken}` },
+          credentials: "same-origin",
+          cache: "no-store",
+        }
+      );
 
       let json: any = null;
       try {
@@ -237,7 +343,10 @@ export default function MyTicketsPage() {
       setQrTokens((prev) => ({ ...prev, [ticketId]: json.token }));
       setQrExp((prev) => ({ ...prev, [ticketId]: json.exp }));
     } catch (e: any) {
-      setQrError((prev) => ({ ...prev, [ticketId]: e?.message ?? "Erreur QR inconnue." }));
+      setQrError((prev) => ({
+        ...prev,
+        [ticketId]: e?.message ?? "Erreur QR inconnue.",
+      }));
     } finally {
       setQrLoading((prev) => ({ ...prev, [ticketId]: false }));
     }
@@ -273,7 +382,7 @@ export default function MyTicketsPage() {
 
     try {
       const { data: sessionData } = await supabase.auth.getSession();
-      const accessToken = sessionData.session?.access_token;
+      const accessToken = sessionData.session?.access_token ?? null;
 
       if (!accessToken) {
         setResaleError((prev) => ({ ...prev, [ticketId]: "Non authentifié." }));
@@ -300,9 +409,7 @@ export default function MyTicketsPage() {
 
       setTickets((prev) =>
         prev.map((ticket) =>
-          ticket.id === ticketId
-            ? { ...ticket, status: "EN_REVENTE" }
-            : ticket
+          ticket.id === ticketId ? { ...ticket, status: "EN_REVENTE" } : ticket
         )
       );
     } catch {
@@ -321,7 +428,7 @@ export default function MyTicketsPage() {
 
     try {
       const { data: sessionData } = await supabase.auth.getSession();
-      const accessToken = sessionData.session?.access_token;
+      const accessToken = sessionData.session?.access_token ?? null;
 
       if (!accessToken) {
         setResaleError((prev) => ({ ...prev, [ticketId]: "Non authentifié." }));
@@ -373,7 +480,9 @@ export default function MyTicketsPage() {
     });
 
     return () => {
-      Object.values(refreshIntervals.current).forEach((id) => window.clearInterval(id));
+      Object.values(refreshIntervals.current).forEach((id) =>
+        window.clearInterval(id)
+      );
       refreshIntervals.current = {};
     };
   }, [fetchQrToken, qrTokens]);
@@ -382,7 +491,9 @@ export default function MyTicketsPage() {
     <section className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold">Mes billets</h1>
-        <p className="mt-2 text-white/70">Retrouve tous tes accès Sidetick au même endroit.</p>
+        <p className="mt-2 text-white/70">
+          Retrouve tous tes accès Sidetick au même endroit.
+        </p>
 
         <div className="mt-4 flex flex-wrap gap-2 text-xs text-white/70">
           <span className="rounded-full border border-white/10 bg-white/5 px-2 py-1">
@@ -404,7 +515,7 @@ export default function MyTicketsPage() {
             Voir les évènements
           </Link>
           <Link
-            href="/resale"
+            href="/marketplace"
             className="inline-flex items-center justify-center rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium hover:bg-white/10"
           >
             Marketplace
@@ -441,7 +552,8 @@ export default function MyTicketsPage() {
         <div className="rounded-2xl border border-white/10 bg-white/5 p-7">
           <h2 className="text-lg font-semibold">Aucun billet pour le moment</h2>
           <p className="mt-2 text-sm text-white/70">
-            Achetez votre premier billet sur un évènement Sidetick — vous le retrouverez ici avec son QR anti-fraude.
+            Achetez votre premier billet sur un évènement Sidetick — vous le
+            retrouverez ici avec son QR anti-fraude.
           </p>
           <div className="mt-5 flex flex-col gap-3 sm:flex-row">
             <Link
@@ -459,264 +571,418 @@ export default function MyTicketsPage() {
           </div>
         </div>
       ) : (
-        <div className="space-y-6">
+        <div className="space-y-10">
           {(() => {
-            const activeTickets = tickets.filter((ticket) => {
-              const startAt = ticket.events?.start_at
-                ? new Date(ticket.events.start_at)
-                : null;
-              const endAt = ticket.events?.end_at
-                ? new Date(ticket.events.end_at)
-                : startAt
-                ? new Date(startAt.getTime() + 2 * 60 * 60 * 1000)
-                : null;
-              return !endAt || nowTs <= endAt.getTime();
-            });
-            const pastTickets = tickets.filter((ticket) => {
-              const startAt = ticket.events?.start_at
-                ? new Date(ticket.events.start_at)
-                : null;
-              const endAt = ticket.events?.end_at
-                ? new Date(ticket.events.end_at)
-                : startAt
-                ? new Date(startAt.getTime() + 2 * 60 * 60 * 1000)
-                : null;
-              return Boolean(endAt && nowTs > endAt.getTime());
+            const activeList = tickets.filter((ticket) => {
+              const { endAt } = computeEventTimes(ticket.events);
+              const isExpired = endAt ? nowTs > endAt.getTime() : false;
+              if (isExpired) return false;
+              if (isCancelledTicket(ticket)) return false;
+              if (isUsedTicket(ticket)) return false;
+              if (isResaleTicket(ticket, resaleByTicketId)) return false;
+              return true;
             });
 
-            const renderList = (list: TicketRow[]) => (
-              <div className="grid gap-4">
-                {list.map((ticket) => {
-            const event = ticket.events;
-            const batch = ticket.ticket_batches;
+            const resaleList = tickets.filter((ticket) => {
+              const { endAt } = computeEventTimes(ticket.events);
+              const isExpired = endAt ? nowTs > endAt.getTime() : false;
+              if (isExpired) return false;
+              if (isCancelledTicket(ticket)) return false;
+              if (isUsedTicket(ticket)) return false;
+              return isResaleTicket(ticket, resaleByTicketId);
+            });
 
-            const unlockHours = event?.ticket_unlock_hours ?? 2;
-            const unlockLabel = formatUnlockLabel(unlockHours);
+            // “Utilisés” = USED / used_at / expirés / cancelled
+            const usedList = tickets.filter((ticket) => {
+              const { endAt } = computeEventTimes(ticket.events);
+              const isExpired = endAt ? nowTs > endAt.getTime() : false;
+              return (
+                isUsedTicket(ticket) || isExpired || isCancelledTicket(ticket)
+              );
+            });
 
-            const startAt = event?.start_at ? new Date(event.start_at) : null;
-            const endAt = event?.end_at
-              ? new Date(event.end_at)
-              : startAt
-              ? new Date(startAt.getTime() + 2 * 60 * 60 * 1000)
-              : null;
-            const unlockAt = startAt
-              ? new Date(startAt.getTime() - unlockHours * 60 * 60 * 1000)
-              : null;
+            const sections: Array<{
+              key: string;
+              title: string;
+              subtitle: string;
+              list: TicketRow[];
+              mode: "active" | "resale" | "used";
+            }> = [
+              {
+                key: "active",
+                title: "Billets actifs",
+                subtitle:
+                  "Billets disponibles (non utilisés et non listés en revente).",
+                list: activeList,
+                mode: "active",
+              },
+              {
+                key: "resale",
+                title: "Billets en revente",
+                subtitle: "Billets actuellement listés sur la marketplace.",
+                list: resaleList,
+                mode: "resale",
+              },
+              {
+                key: "used",
+                title: "Billets utilisés / terminés",
+                subtitle: "Billets déjà scannés/consommés, expirés, ou annulés.",
+                list: usedList,
+                mode: "used",
+              },
+            ];
 
-            const unlocked = unlockAt ? nowTs >= unlockAt.getTime() : false;
+            const renderTicketCard = (
+              ticket: TicketRow,
+              mode: "active" | "resale" | "used"
+            ) => {
+              const event = ticket.events;
+              const batch = ticket.ticket_batches;
 
-            const qrToken = qrTokens[ticket.id];
-            const qrExpiresAt = qrExp[ticket.id];
-            const qrErrorMessage = qrError[ticket.id];
-            const qrBusy = qrLoading[ticket.id];
+              const unlockHours = event?.ticket_unlock_hours ?? 2;
+              const unlockLabel = formatUnlockLabel(unlockHours);
 
-            const secondsLeft =
-              typeof qrExpiresAt === "number"
-                ? Math.max(0, Math.floor((qrExpiresAt - nowTs) / 1000))
+              const { startAt, endAt } = computeEventTimes(event);
+              const unlockAt = startAt
+                ? new Date(startAt.getTime() - unlockHours * 60 * 60 * 1000)
                 : null;
 
-            const staffUrl = qrToken ? `/staff?token=${qrToken}` : null;
-            const showCode = showStaffCode[ticket.id] ?? false;
-            const copied = copyStatus[ticket.id] ?? false;
-            const resaleBusy = resaleLoading[ticket.id] ?? false;
-            const resaleErrorMessage = resaleError[ticket.id] ?? null;
-            const isResellable =
-              !ticket.used_at &&
-              (ticket.status === "VALID" || ticket.status === "ACTIVE");
-            const resaleId = resaleByTicketId[ticket.id];
-            const canCancelResale =
-              ticket.status === "EN_REVENTE" && Boolean(resaleId);
-            const isExpired = endAt ? nowTs > endAt.getTime() : false;
+              const unlocked = unlockAt ? nowTs >= unlockAt.getTime() : false;
 
-            return (
-              <div key={ticket.id} className="rounded-2xl border border-white/10 bg-white/5 p-5">
-                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="space-y-2">
-                    <div className="text-xs text-white/50">Billet</div>
-                    <h2 className="text-xl font-semibold">{event?.title ?? "Événement"}</h2>
-                    <p className="text-sm text-white/70">
-                      {event?.start_at ? new Date(event.start_at).toLocaleString() : "Date à confirmer"}
-                    </p>
-                    <p className="text-sm text-white/60">
-                      {event?.city ?? "Ville à confirmer"}
-                      {event?.venue_name ? ` · ${event.venue_name}` : ""}
-                    </p>
-                    <p className="text-sm text-white/70">
-                      Lot: <span className="text-white">{batch?.name ?? "Standard"}</span>
-                    </p>
-                  </div>
+              const qrToken = qrTokens[ticket.id];
+              const qrExpiresAt = qrExp[ticket.id];
+              const qrErrorMessage = qrError[ticket.id];
+              const qrBusy = qrLoading[ticket.id];
 
-                  <div className="flex flex-col items-start gap-2 text-sm sm:items-end">
-                    <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-white/70">
-                      Statut: <span className="text-white">{formatTicketStatus(ticket.status)}</span>
-                    </span>
-                    <span
-                      className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                        unlocked ? "bg-[#7A3CFF]/20 text-[#C7B5FF]" : "bg-white/10 text-white/70"
-                      }`}
-                    >
-                      {unlocked ? "QR disponible" : "QR verrouillé"}
-                    </span>
-                    {!unlocked && unlockAt ? (
-                      <span className="text-xs text-white/60">
-                        Disponible dans{" "}
-                        {Math.max(0, Math.floor((unlockAt.getTime() - nowTs) / 1000))} sec
+              const secondsLeft =
+                typeof qrExpiresAt === "number"
+                  ? Math.max(0, Math.floor((qrExpiresAt - nowTs) / 1000))
+                  : null;
+
+              const staffUrl = qrToken ? `/staff?token=${qrToken}` : null;
+              const showCode = showStaffCode[ticket.id] ?? false;
+              const copied = copyStatus[ticket.id] ?? false;
+
+              const resaleBusy = resaleLoading[ticket.id] ?? false;
+              const resaleErrorMessage = resaleError[ticket.id] ?? null;
+
+              const resaleId = resaleByTicketId[ticket.id];
+              const canCancelResale = Boolean(resaleId);
+
+              const isExpired = endAt ? nowTs > endAt.getTime() : false;
+              const isUsed = isUsedTicket(ticket);
+              const isCancelled = isCancelledTicket(ticket);
+
+              const isResellable =
+                !isUsed &&
+                !isExpired &&
+                !isCancelled &&
+                !resaleId &&
+                (ticket.status === "VALID" || ticket.status === "ACTIVE");
+
+              return (
+                <div
+                  key={ticket.id}
+                  className="rounded-2xl border border-white/10 bg-white/5 p-5"
+                >
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="space-y-2">
+                      <div className="text-xs text-white/50">Billet</div>
+                      <h3 className="text-xl font-semibold">
+                        {event?.title ?? "Événement"}
+                      </h3>
+                      <p className="text-sm text-white/70">
+                        {event?.start_at
+                          ? new Date(event.start_at).toLocaleString()
+                          : "Date à confirmer"}
+                      </p>
+                      <p className="text-sm text-white/60">
+                        {event?.city ?? "Ville à confirmer"}
+                        {event?.venue_name ? ` · ${event.venue_name}` : ""}
+                      </p>
+                      <p className="text-sm text-white/70">
+                        Lot:{" "}
+                        <span className="text-white">
+                          {batch?.name ?? "Standard"}
+                        </span>
+                      </p>
+                    </div>
+
+                    <div className="flex flex-col items-start gap-2 text-sm sm:items-end">
+                      <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-white/70">
+                        Statut:{" "}
+                        <span className="text-white">
+                          {formatTicketStatus(ticket.status)}
+                        </span>
                       </span>
-                    ) : null}
-                    {isExpired ? (
-                      <span className="rounded-full border border-red-500/30 bg-red-500/10 px-3 py-1 text-xs font-semibold text-red-200">
-                        Événement terminé
-                      </span>
-                    ) : null}
-                  </div>
-                </div>
 
-                <div className="mt-4 rounded-xl border border-white/10 bg-black/20 p-4 text-sm text-white/70">
-                  {isExpired ? (
-                    <span>Billet expiré — revente et scan désactivés.</span>
-                  ) : !unlocked ? (
-                    <span>
-                      QR anti-fraude visible à {unlockLabel}. Il apparaîtra automatiquement ici avant l’évènement.
-                    </span>
-                  ) : qrToken && staffUrl ? (
-                    <div className="space-y-3">
-                      <div className="flex flex-col items-center gap-3 rounded-xl bg-white/5 p-3 text-center sm:flex-row sm:items-start sm:text-left">
-                        <QRCodeCanvas value={staffUrl} size={120} bgColor="#0D001C" fgColor="#FFFFFF" />
-                        <div className="space-y-2">
-                          <p className="text-sm text-white/80">Scan requis pour entrée staff.</p>
-                          <button
-                            type="button"
-                            onClick={() => handleShowCode(ticket.id)}
-                            className="inline-flex items-center justify-center rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium hover:bg-white/10"
-                          >
-                            Afficher le code pour le staff
-                          </button>
-                          {secondsLeft !== null ? (
-                            <p className="text-xs text-white/60">Expire dans {secondsLeft} sec</p>
-                          ) : null}
-                        </div>
-                      </div>
-                      {showCode ? (
-                        <div className="rounded-xl border border-white/10 bg-black/20 p-3">
-                          <p className="text-xs text-white/60">
-                            Code de validation (à donner au staff)
-                          </p>
-                          <div className="mt-2 flex flex-wrap items-center gap-3">
-                            <input
-                              ref={(node) => {
-                                codeInputRefs.current[ticket.id] = node;
-                              }}
-                              value={qrToken}
-                              readOnly
-                              className="min-w-[220px] flex-1 rounded-xl border border-white/15 bg-black/40 px-3 py-2 font-mono text-xs text-white outline-none"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => handleCopyCode(ticket.id, qrToken)}
-                              className="inline-flex items-center justify-center rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-xs font-medium hover:bg-white/10"
-                            >
-                              {copied ? "Copié" : "Copier"}
-                            </button>
-                          </div>
-                        </div>
+                      {mode === "used" ? (
+                        <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-white/70">
+                          {isCancelled
+                            ? "ANNULÉ"
+                            : isUsed
+                            ? "USED"
+                            : "TERMINÉ"}
+                        </span>
+                      ) : (
+                        <span
+                          className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                            unlocked
+                              ? "bg-[#7A3CFF]/20 text-[#C7B5FF]"
+                              : "bg-white/10 text-white/70"
+                          }`}
+                        >
+                          {unlocked ? "QR disponible" : "QR verrouillé"}
+                        </span>
+                      )}
+
+                      {!unlocked && unlockAt && mode !== "used" ? (
+                        <span className="text-xs text-white/60">
+                          Disponible dans{" "}
+                          {Math.max(
+                            0,
+                            Math.floor((unlockAt.getTime() - nowTs) / 1000)
+                          )}{" "}
+                          sec
+                        </span>
+                      ) : null}
+
+                      {isExpired ? (
+                        <span className="rounded-full border border-red-500/30 bg-red-500/10 px-3 py-1 text-xs font-semibold text-red-200">
+                          Événement terminé
+                        </span>
                       ) : null}
                     </div>
-                  ) : (
-                    <span>
-                      QR disponible. Clique sur « Afficher QR » pour générer un code temporaire.
-                    </span>
-                  )}
+                  </div>
+
+                  <div className="mt-4 rounded-xl border border-white/10 bg-black/20 p-4 text-sm text-white/70">
+                    {isExpired || mode === "used" ? (
+                      <span>Billet terminé — revente et scan désactivés.</span>
+                    ) : !unlocked ? (
+                      <span>
+                        QR anti-fraude visible à {unlockLabel}. Il apparaîtra
+                        automatiquement ici avant l’évènement.
+                      </span>
+                    ) : qrToken && staffUrl ? (
+                      <div className="space-y-3">
+                        <div className="flex flex-col items-center gap-3 rounded-xl bg-white/5 p-3 text-center sm:flex-row sm:items-start sm:text-left">
+                          <QRCodeCanvas
+                            value={staffUrl}
+                            size={120}
+                            bgColor="#0D001C"
+                            fgColor="#FFFFFF"
+                          />
+                          <div className="space-y-2">
+                            <p className="text-sm text-white/80">
+                              Scan requis pour entrée staff.
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => handleShowCode(ticket.id)}
+                              className="inline-flex items-center justify-center rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium hover:bg-white/10"
+                            >
+                              Afficher le code pour le staff
+                            </button>
+                            {secondsLeft !== null ? (
+                              <p className="text-xs text-white/60">
+                                Expire dans {secondsLeft} sec
+                              </p>
+                            ) : null}
+                          </div>
+                        </div>
+
+                        {showCode ? (
+                          <div className="rounded-xl border border-white/10 bg-black/20 p-3">
+                            <p className="text-xs text-white/60">
+                              Code de validation (à donner au staff)
+                            </p>
+                            <div className="mt-2 flex flex-wrap items-center gap-3">
+                              <input
+                                ref={(node) => {
+                                  codeInputRefs.current[ticket.id] = node;
+                                }}
+                                value={qrToken}
+                                readOnly
+                                className="min-w-[220px] flex-1 rounded-xl border border-white/15 bg-black/40 px-3 py-2 font-mono text-xs text-white outline-none"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleCopyCode(ticket.id, qrToken)}
+                                className="inline-flex items-center justify-center rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-xs font-medium hover:bg-white/10"
+                              >
+                                {copied ? "Copié" : "Copier"}
+                              </button>
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <span>
+                        QR disponible. Clique sur « Afficher QR » pour générer
+                        un code temporaire.
+                      </span>
+                    )}
+                  </div>
+
+                  {unlocked && !isExpired && mode !== "used" ? (
+                    <div className="mt-3 flex flex-wrap items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => fetchQrToken(ticket.id)}
+                        disabled={qrBusy}
+                        className="inline-flex items-center justify-center rounded-xl bg-[#7A3CFF] px-4 py-2 text-sm font-medium hover:opacity-90 disabled:opacity-60"
+                      >
+                        {qrToken ? "Rafraîchir QR" : "Afficher QR"}
+                      </button>
+                      {qrErrorMessage ? (
+                        <span className="text-sm text-red-200">
+                          {qrErrorMessage}
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  {isResellable ? (
+                    <div className="mt-3 flex flex-wrap items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => handleResaleCreate(ticket.id)}
+                        disabled={resaleBusy}
+                        className="inline-flex items-center justify-center rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium hover:bg-white/10 disabled:opacity-60"
+                      >
+                        {resaleBusy ? "Mise en revente…" : "Mettre en revente"}
+                      </button>
+                      {resaleErrorMessage ? (
+                        <span className="text-sm text-red-200">
+                          {resaleErrorMessage}
+                        </span>
+                      ) : null}
+                      <p className="w-full text-xs text-white/60">
+                        Revente officielle : prix plafonné + frais 10%.
+                      </p>
+                    </div>
+                  ) : null}
+
+                  {canCancelResale && mode !== "used" ? (
+                    <div className="mt-3 flex flex-wrap items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => handleResaleCancel(ticket.id, resaleId)}
+                        disabled={resaleBusy}
+                        className="inline-flex items-center justify-center rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium hover:bg-white/10 disabled:opacity-60"
+                      >
+                        {resaleBusy
+                          ? "Retrait…"
+                          : isExpired
+                          ? "Retirer (forcé)"
+                          : "Retirer de la revente"}
+                      </button>
+                      {resaleErrorMessage ? (
+                        <span className="text-sm text-red-200">
+                          {resaleErrorMessage}
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="text-xs text-white/50">
+                      Ticket ID: {ticket.id}
+                    </div>
+                    <Link
+                      href={`/events/${ticket.event_id}`}
+                      className="inline-flex items-center justify-center rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium hover:bg-white/10"
+                    >
+                      Voir l&apos;événement
+                    </Link>
+                  </div>
                 </div>
+              );
+            };
 
-                {unlocked && !isExpired ? (
-                  <div className="mt-3 flex flex-wrap items-center gap-3">
-                    <button
-                      type="button"
-                      onClick={() => fetchQrToken(ticket.id)}
-                      disabled={qrBusy}
-                      className="inline-flex items-center justify-center rounded-xl bg-[#7A3CFF] px-4 py-2 text-sm font-medium hover:opacity-90 disabled:opacity-60"
-                    >
-                      {qrToken ? "Rafraîchir QR" : "Afficher QR"}
-                    </button>
-                    {qrErrorMessage ? <span className="text-sm text-red-200">{qrErrorMessage}</span> : null}
-                  </div>
-                ) : null}
+            const renderAccordion = (
+              sectionKey: string,
+              list: TicketRow[],
+              mode: "active" | "resale" | "used"
+            ) => {
+              const groups = groupTicketsByEvent(list);
 
-                {isResellable && !isExpired ? (
-                  <div className="mt-3 flex flex-wrap items-center gap-3">
-                    <button
-                      type="button"
-                      onClick={() => handleResaleCreate(ticket.id)}
-                      disabled={resaleBusy}
-                      className="inline-flex items-center justify-center rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium hover:bg-white/10 disabled:opacity-60"
-                    >
-                      {resaleBusy ? "Mise en revente…" : "Mettre en revente"}
-                    </button>
-                    {resaleErrorMessage ? (
-                      <span className="text-sm text-red-200">{resaleErrorMessage}</span>
-                    ) : null}
-                    <p className="w-full text-xs text-white/60">
-                      Revente officielle : prix plafonné + frais 10%.
-                    </p>
+              if (groups.length === 0) {
+                return (
+                  <div className="rounded-2xl border border-white/10 bg-white/5 p-5 text-white/70">
+                    Aucun billet.
                   </div>
-                ) : null}
-                {canCancelResale ? (
-                  <div className="mt-3 flex flex-wrap items-center gap-3">
-                    <button
-                      type="button"
-                      onClick={() => handleResaleCancel(ticket.id, resaleId)}
-                      disabled={resaleBusy}
-                      className="inline-flex items-center justify-center rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium hover:bg-white/10 disabled:opacity-60"
-                    >
-                      {resaleBusy
-                        ? "Retrait…"
-                        : isExpired
-                        ? "Retirer (forcé)"
-                        : "Retirer de la revente"}
-                    </button>
-                    {resaleErrorMessage ? (
-                      <span className="text-sm text-red-200">{resaleErrorMessage}</span>
-                    ) : null}
-                  </div>
-                ) : null}
+                );
+              }
 
-                <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="text-xs text-white/50">Ticket ID: {ticket.id}</div>
-                  <Link
-                    href={`/events/${ticket.event_id}`}
-                    className="inline-flex items-center justify-center rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium hover:bg-white/10"
-                  >
-                    Voir l&apos;événement
-                  </Link>
+              return (
+                <div className="space-y-4">
+                  {groups.map((g) => {
+                    const event = g.event;
+                    const title = event?.title ?? "Événement";
+                    const dateLabel = event?.start_at
+                      ? new Date(event.start_at).toLocaleString()
+                      : "Date à confirmer";
+                    const countdown = formatCountdownToStart(event?.start_at, nowTs);
+
+                    const key = `${sectionKey}:${g.event_id}`;
+                    const open = openGroups[key] ?? true;
+
+                    return (
+                      <div
+                        key={key}
+                        className="rounded-2xl border border-white/10 bg-white/5"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => toggleGroup(key)}
+                          className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left"
+                        >
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-semibold text-white">
+                              {title}
+                            </div>
+                            <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-white/60">
+                              <span>{dateLabel}</span>
+                              <span>
+                                {g.tickets.length} billet
+                                {g.tickets.length > 1 ? "s" : ""}
+                              </span>
+                              {countdown ? (
+                                <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5">
+                                  Débute dans {countdown}
+                                </span>
+                              ) : null}
+                            </div>
+                          </div>
+                          <div className="shrink-0 text-xs text-white/70">
+                            {open ? "Masquer" : "Afficher"}
+                          </div>
+                        </button>
+
+                        {open ? (
+                          <div className="border-t border-white/10 px-5 py-4">
+                            <div className="space-y-4">
+                              {g.tickets.map((t) => renderTicketCard(t, mode))}
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
                 </div>
-              </div>
-            );
-                })}
-              </div>
-            );
+              );
+            };
 
             return (
-              <div className="space-y-6">
-                <div className="space-y-3">
-                  <h2 className="text-lg font-semibold">Tickets actifs</h2>
-                  {activeTickets.length === 0 ? (
-                    <div className="rounded-2xl border border-white/10 bg-white/5 p-5 text-white/70">
-                      Aucun ticket actif.
-                    </div>
-                  ) : (
-                    renderList(activeTickets)
-                  )}
-                </div>
-                <div className="space-y-3">
-                  <h2 className="text-lg font-semibold">Tickets passés</h2>
-                  {pastTickets.length === 0 ? (
-                    <div className="rounded-2xl border border-white/10 bg-white/5 p-5 text-white/70">
-                      Aucun ticket passé.
-                    </div>
-                  ) : (
-                    renderList(pastTickets)
-                  )}
-                </div>
+              <div className="space-y-10">
+                {sections.map((s) => (
+                  <div key={s.key} className="space-y-3">
+                    <h2 className="text-lg font-semibold">{s.title}</h2>
+                    <p className="text-sm text-white/70">{s.subtitle}</p>
+                    {renderAccordion(s.key, s.list, s.mode)}
+                  </div>
+                ))}
               </div>
             );
           })()}
