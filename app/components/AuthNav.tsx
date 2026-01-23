@@ -68,6 +68,18 @@ export default function AuthNav() {
     </>
   );
 
+  const roleLabel =
+    roleUpper === "ORGANIZER" ? "Organizer" : roleUpper === "STAFF" ? "Staff" : roleUpper === "FAN" ? "Fan" : effectiveRole ?? "?";
+
+  const displayEmail = (() => {
+    if (!effectiveEmail) return null;
+    const [local, domain] = effectiveEmail.split("@");
+    if (!domain) return effectiveEmail;
+    const start = local.slice(0, 3);
+    const end = local.slice(-2);
+    return `${start}…${end}@${domain}`;
+  })();
+
   // While loading, keep a stable placeholder to avoid layout jumps.
   // But if loading seems stuck, show Login rather than an infinite placeholder.
   if (loading && !effectiveEmail && !loadingTimedOut) {
@@ -101,8 +113,17 @@ export default function AuthNav() {
       {publicLinks}
 
       {/* Identity (not clickable to avoid duplicate navigation) */}
-      <div className="text-white/70" title={effectiveEmail}>
-        {effectiveEmail} <span className="text-[#7A3CFF]">({effectiveRole ?? "?"})</span>
+      <div className="flex items-center gap-2 text-white/70" title={effectiveEmail ?? undefined}>
+        <span>
+          {displayEmail ?? "…"}
+        </span>
+        <span
+          className="rounded-full border border-white/15 bg-white/5 px-2 py-0.5 text-[10px] font-medium tracking-wide text-[#7A3CFF]"
+          title="Votre rôle détermine les pages accessibles"
+          aria-label={`Rôle: ${roleLabel}`}
+        >
+          {roleLabel}
+        </span>
       </div>
 
       {/* Quick actions */}
