@@ -20,12 +20,6 @@ function SiteHeader() {
       </Link>
 
       <nav className="flex items-center gap-4 text-sm text-white/70">
-        <Link className="hover:text-white" href="/events">
-          Events
-        </Link>
-        <Link className="hover:text-white" href="/org">
-          Organisateur
-        </Link>
         <AuthNav />
       </nav>
     </header>

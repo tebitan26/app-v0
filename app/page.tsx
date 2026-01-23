@@ -50,13 +50,6 @@ export default function Home() {
           <div className="mt-2 font-semibold">QR visible uniquement à T-2h</div>
         </div>
       </div>
-
-      <div className="mt-10 text-sm text-white/60">
-        Couleurs Sidetick: <span className="text-white">#1B003B</span> /{" "}
-        <span className="text-[#7A3CFF]">#7A3CFF</span> /{" "}
-        <span className="text-[#FF0099]">#FF0099</span> /{" "}
-        <span className="text-[#FB4437]">#FB4437</span>
-      </div>
     </section>
   );
 }
