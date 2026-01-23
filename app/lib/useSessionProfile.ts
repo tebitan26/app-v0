@@ -12,6 +12,10 @@ type SessionResponse = {
   role?: string | null;
 };
 
+function isRole(value: any): value is Role {
+  return value === "FAN" || value === "ORGANIZER" || value === "STAFF" || value === "ADMIN";
+}
+
 export function useSessionProfile() {
   const [loading, setLoading] = useState(true);
   const [userId, setUserId] = useState<string | null>(null);
@@ -51,7 +55,27 @@ export function useSessionProfile() {
         }
 
         setUserEmail(data.email);
-        setRole((data.role as Role) ?? null);
+        const nextRole = isRole(data.role) ? (data.role as Role) : null;
+        setRole(nextRole);
+
+        // Fallback: some setups return a valid session but role can be null/undefined.
+        // In that case, fetch it directly from `profiles` (RLS allows self-read).
+        if (!nextRole && data.userId) {
+          try {
+            const { data: prof } = await supabase
+              .from("profiles")
+              .select("role")
+              .eq("id", data.userId)
+              .maybeSingle();
+
+            if (!isMounted) return;
+            const profRole = isRole(prof?.role) ? (prof!.role as Role) : null;
+            setRole(profRole);
+          } catch {
+            // ignore fallback errors; role remains null
+          }
+        }
+
         setUserId(data.userId ?? null);
         setLoading(false);
       } catch (error) {
@@ -75,6 +99,7 @@ export function useSessionProfile() {
     // Use onAuthStateChange as a trigger to refetch from server
     const { data: sub } = supabase.auth.onAuthStateChange(() => {
       if (isMounted) {
+        setLoading(true);
         fetchSession();
       }
     });
@@ -82,7 +107,8 @@ export function useSessionProfile() {
     // Timeout safety: if loading takes too long, stop loading
     timeoutId = setTimeout(() => {
       if (isMounted) {
-        setLoading(false);
+        // Only stop loading if we still don't know the session.
+        setLoading((prev) => (prev ? false : prev));
       }
     }, 5000);
 
