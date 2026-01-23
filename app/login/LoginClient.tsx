@@ -21,6 +21,7 @@ export default function LoginClient() {
   const rawNextParam = searchParams.get("next") || "/events";
   const intentParam = searchParams.get("intent");
   const batchIdParam = searchParams.get("batchId");
+  const buyParam = searchParams.get("buy");
 
   // Security: prevent open-redirects. We only accept internal paths.
   const nextPath = useMemo(() => {
@@ -39,11 +40,13 @@ export default function LoginClient() {
 
     // We use these flags so destination pages can refresh state / auto-run actions.
     u.searchParams.set("fromAuth", "1");
-    if (intentParam === "buy") u.searchParams.set("autoBuy", "1");
+    // Auto-buy can be triggered either by legacy `intent=buy` (event batches) or by Marketplace `buy=<resaleId>`.
+    if (intentParam === "buy" || buyParam) u.searchParams.set("autoBuy", "1");
     if (batchIdParam) u.searchParams.set("batchId", batchIdParam);
+    if (buyParam) u.searchParams.set("buy", buyParam);
 
     return `${u.pathname}${u.search}`;
-  }, [nextPath, intentParam, batchIdParam]);
+  }, [nextPath, intentParam, batchIdParam, buyParam]);
 
   const buildCallbackUrl = useCallback((): string => {
     const cb = new URL("/auth/callback", getSiteUrl());
@@ -51,8 +54,9 @@ export default function LoginClient() {
     cb.searchParams.set("next", nextPath);
     if (intentParam) cb.searchParams.set("intent", intentParam);
     if (batchIdParam) cb.searchParams.set("batchId", batchIdParam);
+    if (buyParam) cb.searchParams.set("buy", buyParam);
     return cb.toString();
-  }, [nextPath, intentParam, batchIdParam]);
+  }, [nextPath, intentParam, batchIdParam, buyParam]);
 
   useEffect(() => {
     let mounted = true;
@@ -158,7 +162,7 @@ export default function LoginClient() {
       <h1 className="text-3xl font-bold">Connexion</h1>
       <p className="mt-3 text-white/80">
         Entre ton email : si tu as déjà un compte, tu te connectes. Sinon, on crée ton compte automatiquement.
-        {intentParam === "buy" ? (
+        {intentParam === "buy" || buyParam ? (
           <span className="block mt-2 text-white/70">
             Une fois connecté, on te ramène automatiquement pour finaliser ton achat.
           </span>

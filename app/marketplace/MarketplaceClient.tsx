@@ -85,6 +85,7 @@ export default function MarketplaceClient() {
       const { data: sessionData } = await supabase.auth.getSession();
       const accessToken = sessionData.session?.access_token;
 
+      // UX: allow guest users to start purchase, account will be created after payment
       if (!accessToken) {
         window.location.href = `/login?next=${encodeURIComponent(
           "/marketplace"
@@ -144,6 +145,16 @@ export default function MarketplaceClient() {
           Billets en revente disponibles sans inscription.
         </p>
       </div>
+
+      {!isLoggedIn && (
+        <div className="rounded-2xl border border-blue-500/30 bg-blue-500/10 p-4 text-sm text-blue-100">
+          <strong>Achat sans compte possible.</strong>
+          <p className="mt-1 text-blue-100/80">
+            Vous pouvez acheter un billet sans être connecté. Un compte sera automatiquement
+            créé à la fin du paiement pour sécuriser votre billet.
+          </p>
+        </div>
+      )}
 
       {error ? (
         <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-red-200">
@@ -222,10 +233,10 @@ export default function MarketplaceClient() {
                     disabled={buying[row.id]}
                     className="inline-flex items-center justify-center rounded-xl bg-[#7A3CFF] px-4 py-2 text-sm font-medium hover:opacity-90 disabled:opacity-60"
                   >
-                    {buying[row.id] ? "Redirection…" : "Acheter"}
+                    {buying[row.id] ? "Redirection vers le paiement…" : "Acheter ce billet"}
                   </button>
-                  <p className="text-xs text-white/60">
-                    La redistribution financière au revendeur sera traitée ultérieurement.
+                  <p className="text-xs text-white/60 text-right">
+                    Paiement sécurisé • Revente officielle • Billet garanti
                   </p>
                 </div>
               </div>

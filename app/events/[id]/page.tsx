@@ -204,6 +204,17 @@ export default function FanEventPage() {
               {new Date(event.start_at).toLocaleString()} · {event.city}
               {event.venue_name ? ` · ${event.venue_name}` : ""}
             </p>
+            <div className="mt-3 flex flex-wrap gap-2 text-xs text-white/70">
+              <span className="rounded-full border border-white/10 bg-white/5 px-2 py-1">
+                Paiement sécurisé
+              </span>
+              <span className="rounded-full border border-white/10 bg-white/5 px-2 py-1">
+                Billet authentique
+              </span>
+              <span className="rounded-full border border-white/10 bg-white/5 px-2 py-1">
+                Revente officielle possible
+              </span>
+            </div>
             {event.description ? (
               <p className="mt-4 text-white/80">{event.description}</p>
             ) : null}
@@ -211,6 +222,9 @@ export default function FanEventPage() {
 
           <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
             <h2 className="text-lg font-semibold">Billets</h2>
+            <p className="mt-2 text-sm text-white/70">
+              Choisissez un lot — l’achat démarre en un clic.
+            </p>
 
             {batches.length === 0 ? (
               <p className="mt-3 text-white/60">Aucun lot disponible.</p>
@@ -219,6 +233,7 @@ export default function FanEventPage() {
                 {batches.map((b) => {
                   const remaining = b.quantity_total - b.quantity_sold;
                   const soldOut = remaining <= 0;
+                  const lowStock = remaining > 0 && remaining <= 5;
                   const isBuying = buyingBatchId === b.id;
 
                   return (
@@ -230,8 +245,13 @@ export default function FanEventPage() {
                         <div>
                           <p className="font-medium">{b.name}</p>
                           <p className="mt-1 text-sm text-white/60">
-                            {(b.price_cents / 100).toFixed(2)} {b.currency} · Restants:{" "}
-                            {remaining}
+                            {(b.price_cents / 100).toFixed(2)} {b.currency} ·{" "}
+                            {soldOut ? "Complet" : `Restants : ${remaining}`}
+                            {lowStock ? (
+                              <span className="ml-2 text-xs text-white/80">
+                                (plus que {remaining})
+                              </span>
+                            ) : null}
                           </p>
                         </div>
 
@@ -240,7 +260,7 @@ export default function FanEventPage() {
                           className="rounded-xl bg-[#7A3CFF] px-4 py-2 text-sm font-medium hover:opacity-90 disabled:opacity-50"
                           onClick={() => handleBuy(b.id)}
                         >
-                          {soldOut ? "Complet" : isBuying ? "Redirection…" : "Acheter"}
+                          {soldOut ? "Complet" : isBuying ? "Redirection vers le paiement…" : "Acheter mon billet"}
                         </button>
                       </div>
                     </li>
