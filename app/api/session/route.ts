@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 
 export async function GET(request: NextRequest) {
-  const response = NextResponse.json({ authenticated: false });
+  // Buffer cookies that Supabase may want to set (refresh tokens, etc.)
+  const cookiesToSet: Array<{ name: string; value: string; options: any }> = [];
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -12,39 +13,49 @@ export async function GET(request: NextRequest) {
         getAll() {
           return request.cookies.getAll();
         },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value, options }) => {
-            response.cookies.set(name, value, options);
-          });
+        setAll(cookies) {
+          cookies.forEach((c) => cookiesToSet.push(c));
         },
       },
     }
   );
 
-  const { data: userData, error } = await supabase.auth.getUser();
+  const { data: userData, error: userErr } = await supabase.auth.getUser();
 
-  if (error || !userData.user) {
-    response.headers.set("Cache-Control", "no-store");
-    return response;
+  if (userErr || !userData.user) {
+    const res = NextResponse.json({ authenticated: false });
+    res.headers.set("Cache-Control", "no-store");
+    cookiesToSet.forEach(({ name, value, options }) =>
+      res.cookies.set(name, value, options)
+    );
+    return res;
   }
 
-  // Fetch role from profiles table if it exists
-  let role: string | null = null;
-  const { data: profile } = await supabase
+  const { data: profile, error: profileErr } = await supabase
     .from("profiles")
     .select("role")
     .eq("id", userData.user.id)
-    .single();
+    .maybeSingle();
 
-  if (profile) {
-    role = profile.role;
-  }
+  const role = profile?.role ?? null;
 
-  response.headers.set("Cache-Control", "no-store");
-  return NextResponse.json({
+  // debug minimal hors prod (optionnel)
+  const debug =
+    process.env.NODE_ENV !== "production" && profileErr
+      ? { profileError: profileErr.message }
+      : {};
+
+  const res = NextResponse.json({
     authenticated: true,
     userId: userData.user.id,
     email: userData.user.email,
-    role: role,
+    role,
+    ...debug,
   });
+
+  res.headers.set("Cache-Control", "no-store");
+  cookiesToSet.forEach(({ name, value, options }) =>
+    res.cookies.set(name, value, options)
+  );
+  return res;
 }
