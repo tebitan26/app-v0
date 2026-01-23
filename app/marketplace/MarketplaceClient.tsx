@@ -150,7 +150,7 @@ export default function MarketplaceClient() {
           <strong>Achat sans compte possible.</strong>
           <p className="mt-1 text-blue-100/80">
             Vous pouvez acheter un billet sans être connecté. Un compte sera automatiquement
-            créé à la fin du paiement pour sécuriser votre billet.
+            créé avant le paiement pour sécuriser votre billet.
           </p>
         </div>
       )}

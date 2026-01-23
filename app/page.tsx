@@ -22,13 +22,6 @@ export default function Home() {
         >
           Voir les événements
         </Link>
-
-        <Link
-          href="/org"
-          className="inline-flex items-center justify-center rounded-xl border border-white/20 px-6 py-3 font-medium text-white hover:bg-white/10"
-        >
-          Espace organisateur
-        </Link>
       </div>
 
       <div className="mt-14 grid gap-4 md:grid-cols-3">
