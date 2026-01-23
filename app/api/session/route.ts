@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
+import { createClient } from "@supabase/supabase-js";
 
 export async function GET(request: NextRequest) {
   // Buffer cookies that Supabase may want to set (refresh tokens, etc.)
@@ -31,18 +32,48 @@ export async function GET(request: NextRequest) {
     return res;
   }
 
-  const { data: profile, error: profileErr } = await supabase
-    .from("profiles")
-    .select("role")
-    .eq("id", userData.user.id)
-    .maybeSingle();
+  // ✅ Fetch role with service role (server-only, bypass RLS)
+  let role: string | null = null;
+  let profileError: string | null = null;
 
-  const role = profile?.role ?? null;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (serviceKey) {
+    const admin = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      serviceKey,
+      {
+        auth: {
+          persistSession: false,
+          autoRefreshToken: false,
+          detectSessionInUrl: false,
+        },
+      }
+    );
+
+    const { data: profile, error: pErr } = await admin
+      .from("profiles")
+      .select("role")
+      .eq("id", userData.user.id)
+      .maybeSingle();
+
+    if (pErr) profileError = pErr.message;
+    if (!pErr && profile) role = profile.role ?? null;
+  } else {
+    const { data: profile, error: pErr } = await supabase
+      .from("profiles")
+      .select("role")
+      .eq("id", userData.user.id)
+      .maybeSingle();
+
+    if (pErr) profileError = pErr.message;
+    if (!pErr && profile) role = profile.role ?? null;
+  }
 
   // debug minimal hors prod (optionnel)
   const debug =
-    process.env.NODE_ENV !== "production" && profileErr
-      ? { profileError: profileErr.message }
+    process.env.NODE_ENV !== "production" && profileError
+      ? { profileError }
       : {};
 
   const res = NextResponse.json({
@@ -57,5 +88,6 @@ export async function GET(request: NextRequest) {
   cookiesToSet.forEach(({ name, value, options }) =>
     res.cookies.set(name, value, options)
   );
+
   return res;
 }
