@@ -80,7 +80,7 @@ function formatCountdownToStart(
   if (Number.isNaN(start.getTime())) return null;
 
   const diffMs = start.getTime() - nowTs;
-  if (diffMs <= 0) return "En cours";
+  if (diffMs <= 0) return null;
 
   const diffMin = Math.floor(diffMs / 60000);
   const diffHr = Math.floor(diffMin / 60);
@@ -110,6 +110,17 @@ function formatCountdownToStart(
 
   if (months > 0) return `${months} mois ${days} j`;
   return `${days} j`;
+}
+
+function formatEventTimingChip(event: EventInfo | null, nowTs: number) {
+  const { startAt, endAt } = computeEventTimes(event);
+  if (!startAt) return null;
+
+  if (endAt && nowTs > endAt.getTime()) return "Terminé";
+  if (nowTs >= startAt.getTime()) return "En cours";
+
+  const countdown = formatCountdownToStart(event?.start_at ?? null, nowTs);
+  return countdown ? `Débute dans ${countdown}` : null;
 }
 
 type TicketGroup = {
@@ -163,6 +174,10 @@ export default function MyTicketsPage() {
     {}
   );
   const [copyStatus, setCopyStatus] = useState<Record<string, boolean>>({});
+
+  const [activeTab, setActiveTab] = useState<"active" | "resale" | "used">(
+    "active"
+  );
 
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
   const toggleGroup = (key: string) => {
@@ -521,6 +536,43 @@ export default function MyTicketsPage() {
             Marketplace
           </Link>
         </div>
+
+        {/* Tabs */}
+        <div className="mt-6 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => setActiveTab("active")}
+            className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium transition ${
+              activeTab === "active"
+                ? "border-white/20 bg-white/10 text-white"
+                : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10"
+            }`}
+          >
+            Actifs
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("resale")}
+            className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium transition ${
+              activeTab === "resale"
+                ? "border-white/20 bg-white/10 text-white"
+                : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10"
+            }`}
+          >
+            En revente
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("used")}
+            className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium transition ${
+              activeTab === "used"
+                ? "border-white/20 bg-white/10 text-white"
+                : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10"
+            }`}
+          >
+            Utilisés / terminés
+          </button>
+        </div>
       </div>
 
       {err ? (
@@ -600,37 +652,6 @@ export default function MyTicketsPage() {
                 isUsedTicket(ticket) || isExpired || isCancelledTicket(ticket)
               );
             });
-
-            const sections: Array<{
-              key: string;
-              title: string;
-              subtitle: string;
-              list: TicketRow[];
-              mode: "active" | "resale" | "used";
-            }> = [
-              {
-                key: "active",
-                title: "Billets actifs",
-                subtitle:
-                  "Billets disponibles (non utilisés et non listés en revente).",
-                list: activeList,
-                mode: "active",
-              },
-              {
-                key: "resale",
-                title: "Billets en revente",
-                subtitle: "Billets actuellement listés sur la marketplace.",
-                list: resaleList,
-                mode: "resale",
-              },
-              {
-                key: "used",
-                title: "Billets utilisés / terminés",
-                subtitle: "Billets déjà scannés/consommés, expirés, ou annulés.",
-                list: usedList,
-                mode: "used",
-              },
-            ];
 
             const renderTicketCard = (
               ticket: TicketRow,
@@ -739,11 +760,17 @@ export default function MyTicketsPage() {
                       {!unlocked && unlockAt && mode !== "used" ? (
                         <span className="text-xs text-white/60">
                           Disponible dans{" "}
-                          {Math.max(
-                            0,
-                            Math.floor((unlockAt.getTime() - nowTs) / 1000)
-                          )}{" "}
-                          sec
+                          {(() => {
+                            const diffMs = Math.max(
+                              0,
+                              unlockAt.getTime() - nowTs
+                            );
+                            const diffMin = Math.floor(diffMs / 60000);
+                            const h = Math.floor(diffMin / 60);
+                            const m = diffMin % 60;
+                            if (h <= 0) return `${m}m`;
+                            return `${h}h ${String(m).padStart(2, "0")}m`;
+                          })()}
                         </span>
                       ) : null}
 
@@ -807,7 +834,9 @@ export default function MyTicketsPage() {
                               />
                               <button
                                 type="button"
-                                onClick={() => handleCopyCode(ticket.id, qrToken)}
+                                onClick={() =>
+                                  handleCopyCode(ticket.id, qrToken)
+                                }
                                 className="inline-flex items-center justify-center rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-xs font-medium hover:bg-white/10"
                               >
                                 {copied ? "Copié" : "Copier"}
@@ -923,10 +952,10 @@ export default function MyTicketsPage() {
                     const dateLabel = event?.start_at
                       ? new Date(event.start_at).toLocaleString()
                       : "Date à confirmer";
-                    const countdown = formatCountdownToStart(event?.start_at, nowTs);
+                    const timingChip = formatEventTimingChip(event, nowTs);
 
                     const key = `${sectionKey}:${g.event_id}`;
-                    const open = openGroups[key] ?? true;
+                    const open = openGroups[key] ?? mode !== "used";
 
                     return (
                       <div
@@ -948,9 +977,9 @@ export default function MyTicketsPage() {
                                 {g.tickets.length} billet
                                 {g.tickets.length > 1 ? "s" : ""}
                               </span>
-                              {countdown ? (
+                              {timingChip ? (
                                 <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5">
-                                  Débute dans {countdown}
+                                  {timingChip}
                                 </span>
                               ) : null}
                             </div>
@@ -974,15 +1003,40 @@ export default function MyTicketsPage() {
               );
             };
 
+            // TAB CONTENT
             return (
-              <div className="space-y-10">
-                {sections.map((s) => (
-                  <div key={s.key} className="space-y-3">
-                    <h2 className="text-lg font-semibold">{s.title}</h2>
-                    <p className="text-sm text-white/70">{s.subtitle}</p>
-                    {renderAccordion(s.key, s.list, s.mode)}
-                  </div>
-                ))}
+              <div className="space-y-3">
+                {activeTab === "active" ? (
+                  <>
+                    <h2 className="text-lg font-semibold">Billets actifs</h2>
+                    <p className="text-sm text-white/70">
+                      Billets disponibles (non utilisés et non listés en revente).
+                    </p>
+                    {renderAccordion("active", activeList, "active")}
+                  </>
+                ) : null}
+
+                {activeTab === "resale" ? (
+                  <>
+                    <h2 className="text-lg font-semibold">Billets en revente</h2>
+                    <p className="text-sm text-white/70">
+                      Billets actuellement listés sur la marketplace.
+                    </p>
+                    {renderAccordion("resale", resaleList, "resale")}
+                  </>
+                ) : null}
+
+                {activeTab === "used" ? (
+                  <>
+                    <h2 className="text-lg font-semibold">
+                      Billets utilisés / terminés
+                    </h2>
+                    <p className="text-sm text-white/70">
+                      Billets déjà scannés/consommés, expirés, ou annulés.
+                    </p>
+                    {renderAccordion("used", usedList, "used")}
+                  </>
+                ) : null}
               </div>
             );
           })()}
