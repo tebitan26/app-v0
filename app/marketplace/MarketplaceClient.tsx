@@ -85,7 +85,8 @@ export default function MarketplaceClient() {
       const { data: sessionData } = await supabase.auth.getSession();
       const accessToken = sessionData.session?.access_token;
 
-      // UX: allow guest users to start purchase, account will be created after payment
+      // UX: purchase can start without having a Sidetick account beforehand,
+      // but we must authenticate before Stripe to safely associate the ticket.
       if (!accessToken) {
         window.location.href = `/login?next=${encodeURIComponent(
           "/marketplace"
@@ -147,10 +148,11 @@ export default function MarketplaceClient() {
 
       {!isLoggedIn && (
         <div className="rounded-2xl border border-blue-500/30 bg-blue-500/10 p-4 text-sm text-blue-100">
-          <strong>Achat sans compte possible.</strong>
+          <strong>Achat rapide.</strong>
           <p className="mt-1 text-blue-100/80">
-            Vous pouvez acheter un billet sans être connecté. Un compte sera automatiquement
-            créé avant le paiement pour sécuriser votre billet.
+            Vous pouvez commencer l’achat sans compte Sidetick au préalable.
+            Avant le paiement, nous vous demanderons de vous connecter (Google ou magic link)
+            pour associer le billet à votre compte et sécuriser l’accès.
           </p>
         </div>
       )}

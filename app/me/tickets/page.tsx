@@ -38,11 +38,12 @@ function formatUnlockLabel(unlockHours: number) {
 
 function formatTicketStatus(status: string) {
   const s = (status || "").toUpperCase();
-  if (s === "VALID" || s === "ACTIVE") return "ACTIVE";
-  if (s === "USED") return "USED";
-  if (s === "CANCELLED" || s === "CANCELED") return "CANCELLED";
-  if (s === "PENDING") return "PENDING";
-  return s || "UNKNOWN";
+  if (s === "VALID" || s === "ACTIVE") return "ACTIF";
+  if (s === "USED") return "UTILISÉ";
+  if (s === "CANCELLED" || s === "CANCELED") return "ANNULÉ";
+  if (s === "PENDING") return "EN ATTENTE";
+  if (s === "EN_REVENTE") return "EN REVENTE";
+  return s || "INCONNU";
 }
 
 function isUsedTicket(t: TicketRow) {
@@ -68,6 +69,17 @@ function computeEventTimes(event: EventInfo | null) {
     ? new Date(startAt.getTime() + 2 * 60 * 60 * 1000)
     : null;
   return { startAt, endAt };
+}
+
+function formatSecondsLeft(sec: number) {
+  const s = Math.max(0, Math.floor(sec));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  if (m < 60) return `${m}m ${String(r).padStart(2, "0")}s`;
+  const h = Math.floor(m / 60);
+  const mm = m % 60;
+  return `${h}h ${String(mm).padStart(2, "0")}m`;
 }
 
 // Countdown: Mois/Jours si >= 24h, sinon Heures/Minutes
@@ -742,7 +754,7 @@ export default function MyTicketsPage() {
                           {isCancelled
                             ? "ANNULÉ"
                             : isUsed
-                            ? "USED"
+                            ? "UTILISÉ"
                             : "TERMINÉ"}
                         </span>
                       ) : (
@@ -812,7 +824,7 @@ export default function MyTicketsPage() {
                             </button>
                             {secondsLeft !== null ? (
                               <p className="text-xs text-white/60">
-                                Expire dans {secondsLeft} sec
+                                Expire dans {formatSecondsLeft(secondsLeft)}
                               </p>
                             ) : null}
                           </div>

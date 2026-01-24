@@ -29,6 +29,14 @@ export default function SuccessClient() {
             <p className="mt-2 text-white/70">
               Ton billet va apparaître dans <span className="text-white/90">Mes billets</span> d’ici quelques instants.
             </p>
+
+            <div className="mt-4 rounded-2xl border border-white/10 bg-black/10 px-4 py-3">
+              <p className="text-xs text-white/70">
+                Achat sans connexion ? Un compte a été créé <span className="text-white/90">avant le paiement</span> avec la même adresse email.
+                Connecte-toi (lien magique / Google) et tu retrouveras tes billets dans « Mes billets ».
+              </p>
+            </div>
+
             <div className="mt-4 flex flex-wrap gap-2 text-xs text-white/70">
               <span className="rounded-full border border-white/10 bg-white/5 px-2 py-1">
                 Paiement sécurisé
@@ -70,7 +78,8 @@ export default function SuccessClient() {
       </div>
 
       <p className="text-xs text-white/40">
-        Si ton billet n’apparaît pas après 30 secondes, rafraîchis la page « Mes billets ». En cas de souci, vérifie aussi ton email de confirmation.
+        Si ton billet n’apparaît pas après 30 secondes, ouvre « Mes billets » puis rafraîchis.
+        En cas de souci, vérifie aussi ton email de confirmation (ou reconnecte-toi avec la même adresse).
       </p>
     </section>
   );

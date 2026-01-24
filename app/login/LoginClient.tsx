@@ -1,5 +1,8 @@
-"use client";
+ "use client";
 
+import Link from "next/link";
+
+import type { FormEvent } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "../lib/supabaseClient";
@@ -10,6 +13,7 @@ type LoginError = "missing_code" | "oauth" | null;
 export default function LoginClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
+
   const [email, setEmail] = useState("");
   const [status, setStatus] = useState<"idle" | "loading" | "sent" | "error">(
     "idle"
@@ -17,19 +21,18 @@ export default function LoginClient() {
   const [message, setMessage] = useState("");
 
   // Deep-link support: after login, bring the user back to where they came from.
-  // Example: /login?next=/events/<id>&intent=buy
+  // Example: /login?next=/events/<id>&intent=buy&batchId=...
   const rawNextParam = searchParams.get("next") || "/events";
   const intentParam = searchParams.get("intent");
   const batchIdParam = searchParams.get("batchId");
   const buyParam = searchParams.get("buy");
 
+  const isBuyIntent = intentParam === "buy" || Boolean(buyParam);
+
   // Security: prevent open-redirects. We only accept internal paths.
   const nextPath = useMemo(() => {
     if (!rawNextParam) return "/events";
-    // Accept only internal paths ("/...") and reject protocol/host inputs.
-    if (rawNextParam.startsWith("/") && !rawNextParam.startsWith("//")) {
-      return rawNextParam;
-    }
+    if (rawNextParam.startsWith("/") && !rawNextParam.startsWith("//")) return rawNextParam;
     return "/events";
   }, [rawNextParam]);
 
@@ -38,15 +41,16 @@ export default function LoginClient() {
     const base = getSiteUrl();
     const u = new URL(nextPath, base);
 
-    // We use these flags so destination pages can refresh state / auto-run actions.
+    // Flags for destination pages
     u.searchParams.set("fromAuth", "1");
-    // Auto-buy can be triggered either by legacy `intent=buy` (event batches) or by Marketplace `buy=<resaleId>`.
-    if (intentParam === "buy" || buyParam) u.searchParams.set("autoBuy", "1");
+
+    // Auto-buy can be triggered either by event-batch intent or Marketplace `buy=<resaleId>`.
+    if (isBuyIntent) u.searchParams.set("autoBuy", "1");
     if (batchIdParam) u.searchParams.set("batchId", batchIdParam);
     if (buyParam) u.searchParams.set("buy", buyParam);
 
     return `${u.pathname}${u.search}`;
-  }, [nextPath, intentParam, batchIdParam, buyParam]);
+  }, [nextPath, isBuyIntent, batchIdParam, buyParam]);
 
   const buildCallbackUrl = useCallback((): string => {
     const cb = new URL("/auth/callback", getSiteUrl());
@@ -69,7 +73,6 @@ export default function LoginClient() {
     const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session) {
         router.replace(buildPostLoginRedirect());
-        // No need for router.refresh() here; destination pages handle fromAuth/autoBuy.
       }
     });
 
@@ -81,9 +84,10 @@ export default function LoginClient() {
 
   useEffect(() => {
     const errorParam = searchParams.get("error");
-    const error: LoginError = errorParam === "missing_code" || errorParam === "oauth" ? errorParam : null;
-    
-    if (error === "missing_code" || error === "oauth") {
+    const error: LoginError =
+      errorParam === "missing_code" || errorParam === "oauth" ? errorParam : null;
+
+    if (error) {
       setStatus("error");
       setMessage(
         "La connexion a échoué. Réessaie de te connecter ou contacte le support."
@@ -93,10 +97,12 @@ export default function LoginClient() {
 
   async function loginWithGoogle() {
     if (status === "loading") return;
+
     setStatus("loading");
     setMessage("");
 
     const redirectTo = buildCallbackUrl();
+
     try {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
@@ -105,19 +111,22 @@ export default function LoginClient() {
           queryParams: { prompt: "select_account" },
         },
       });
+
       if (error) {
         setStatus("error");
         setMessage(error.message);
+        return;
       }
+
+      // Redirect happens on provider callback.
+      setStatus("idle");
     } catch {
       setStatus("error");
       setMessage("Erreur réseau, réessaie.");
-    } finally {
-      setStatus((prev) => (prev === "loading" ? "idle" : prev));
     }
   }
 
-  async function sendMagicLink(e: React.FormEvent) {
+  async function sendMagicLink(e: FormEvent) {
     e.preventDefault();
     if (status === "loading") return;
 
@@ -128,7 +137,6 @@ export default function LoginClient() {
       const { data: sessionData } = await supabase.auth.getSession();
       if (sessionData.session) {
         router.replace(buildPostLoginRedirect());
-        setStatus("idle");
         return;
       }
 
@@ -147,33 +155,51 @@ export default function LoginClient() {
 
       setStatus("sent");
       setMessage(
-        "Lien envoyé ! Clique dans l'email pour te connecter (ou créer ton compte)."
+        "Lien envoyé ! Clique dans l’email pour te connecter (ou créer ton compte)."
       );
     } catch {
       setStatus("error");
       setMessage("Erreur réseau, réessaie.");
-    } finally {
-      setStatus((prev) => (prev === "loading" ? "idle" : prev));
     }
   }
 
+  const headerTitle = isBuyIntent ? "Finaliser ton achat" : "Connexion";
+  const headerSubtitle = isBuyIntent
+    ? "Connexion rapide, puis retour automatique pour terminer le paiement."
+    : "Entre ton email : si tu as déjà un compte, tu te connectes. Sinon, on crée ton compte automatiquement.";
+
+  const intentCard = isBuyIntent ? (
+    <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
+      <div className="text-sm font-medium text-white">Tu es à 1 étape de ton billet</div>
+      <ul className="mt-2 space-y-1 text-sm text-white/70">
+        <li className="flex gap-2">
+          <span className="mt-0.5 text-white/60">•</span>
+          <span>Connexion en 10 secondes (Google ou lien email).</span>
+        </li>
+        <li className="flex gap-2">
+          <span className="mt-0.5 text-white/60">•</span>
+          <span>On te renvoie automatiquement sur la page de paiement.</span>
+        </li>
+        <li className="flex gap-2">
+          <span className="mt-0.5 text-white/60">•</span>
+          <span>Ton billet apparaîtra dans <span className="text-white">Mes billets</span> après l’achat.</span>
+        </li>
+      </ul>
+    </div>
+  ) : null;
+
   return (
     <section className="max-w-md">
-      <h1 className="text-3xl font-bold">Connexion</h1>
-      <p className="mt-3 text-white/80">
-        Entre ton email : si tu as déjà un compte, tu te connectes. Sinon, on crée ton compte automatiquement.
-        {intentParam === "buy" || buyParam ? (
-          <span className="block mt-2 text-white/70">
-            Une fois connecté, on te ramène automatiquement pour finaliser ton achat.
-          </span>
-        ) : null}
-      </p>
+      <h1 className="text-3xl font-bold">{headerTitle}</h1>
+      <p className="mt-3 text-white/80">{headerSubtitle}</p>
+      {intentCard}
 
       <div className="mt-6 space-y-3">
         <button
           type="button"
           onClick={loginWithGoogle}
-          className="w-full rounded-xl border border-white/15 bg-white/5 px-5 py-3 font-medium hover:bg-white/10"
+          disabled={status === "loading"}
+          className="w-full rounded-xl border border-white/15 bg-white/5 px-5 py-3 font-medium hover:bg-white/10 disabled:opacity-60"
         >
           Continuer avec Google
         </button>
@@ -187,7 +213,9 @@ export default function LoginClient() {
 
       <form onSubmit={sendMagicLink} className="mt-8 space-y-4">
         <div>
-          <label htmlFor="email" className="text-sm text-white/70">Email</label>
+          <label htmlFor="email" className="text-sm text-white/70">
+            Email
+          </label>
           <input
             id="email"
             name="email"
@@ -204,6 +232,9 @@ export default function LoginClient() {
             placeholder="ton@email.com"
             className="mt-2 w-full rounded-xl border border-white/15 bg-white/5 px-4 py-3 text-white placeholder:text-white/40 outline-none focus:border-[#7A3CFF]/60"
           />
+          <p className="mt-2 text-xs text-white/50">
+            On t’envoie un lien sécurisé (pas de mot de passe).
+          </p>
         </div>
 
         <button
@@ -211,7 +242,7 @@ export default function LoginClient() {
           disabled={status === "loading"}
           className="w-full rounded-xl bg-[#7A3CFF] px-5 py-3 font-medium hover:opacity-90 disabled:opacity-60"
         >
-          {status === "loading" ? "Envoi..." : "Recevoir mon lien"}
+          {status === "loading" ? "Envoi…" : "Recevoir mon lien"}
         </button>
 
         {message ? (
@@ -223,6 +254,21 @@ export default function LoginClient() {
             {message}
           </p>
         ) : null}
+
+        {status === "sent" ? (
+          <div className="rounded-2xl border border-white/10 bg-black/20 p-4 text-sm text-white/70">
+            <div className="font-medium text-white">Astuce</div>
+            <div className="mt-1">
+              Si tu ne vois rien, vérifie tes spams ou attends 30 secondes.
+            </div>
+          </div>
+        ) : null}
+
+        <div className="pt-2">
+          <Link href="/events" className="text-sm text-white/60 hover:text-white">
+            Retour aux événements
+          </Link>
+        </div>
       </form>
     </section>
   );
