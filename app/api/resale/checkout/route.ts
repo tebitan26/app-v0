@@ -111,6 +111,23 @@ export async function POST(req: Request) {
     : ticket.events;
   const eventTitle = eventInfo?.title ?? "Ticket Sidetick";
 
+  // Buyer pays +10% fee (rounded up to the next cent)
+  // Equivalent to: Math.ceil(resale.price_cents * 1.1)
+  const sellerPriceCents = Number(resale.price_cents || 0);
+
+  // PoC rule: free tickets cannot be resold
+  // (avoids Stripe 0€ checkouts and keeps marketplace logic simple)
+  if (!Number.isFinite(sellerPriceCents) || sellerPriceCents <= 0) {
+    return NextResponse.json({ error: "free_ticket_resale_not_allowed" }, { status: 400 });
+  }
+
+  const buyerPriceCents = Math.floor((sellerPriceCents * 110 + 99) / 100);
+  const feeCents = buyerPriceCents - sellerPriceCents;
+
+  if (!Number.isFinite(buyerPriceCents) || buyerPriceCents <= 0) {
+    return NextResponse.json({ error: "invalid_price" }, { status: 400 });
+  }
+
   const siteUrl = getSiteUrl();
 
   const { data: pendingRows, error: pendingError } = await supabaseAdmin
@@ -140,9 +157,10 @@ export async function POST(req: Request) {
         quantity: 1,
         price_data: {
           currency: (resale.currency || "EUR").toLowerCase(),
-          unit_amount: resale.price_cents,
+          unit_amount: buyerPriceCents,
           product_data: {
             name: `Revente — ${eventTitle}`,
+            // Note: the amount charged includes platform fees (+10%)
           },
         },
       },
@@ -158,6 +176,9 @@ export async function POST(req: Request) {
       seller_id: resale.seller_id,
       event_id: resale.event_id,
       ticket_id_old: resale.ticket_id,
+      seller_price_cents: String(sellerPriceCents),
+      buyer_price_cents: String(buyerPriceCents),
+      fee_cents: String(feeCents),
     },
   });
 

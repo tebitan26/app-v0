@@ -20,16 +20,13 @@ type EventRow = {
   }[];
 };
 
-type OrderRow = {
+type RevenueKpiRow = {
   event_id: string;
-  amount_cents: number | null;
-  fee_cents: number | null;
-};
-
-type OrdersStats = {
-  soldCount: number;
-  grossCents: number;
-  feeCents: number;
+  primary_ca_cents: number | null;
+  secondary_fee_cents: number | null;
+  total_ca_cents: number | null;
+  primary_orders_paid: number | null;
+  secondary_resales_sold: number | null;
 };
 
 export default function OrgPage() {
@@ -37,8 +34,8 @@ export default function OrgPage() {
   const [events, setEvents] = useState<EventRow[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [loadingEvents, setLoadingEvents] = useState(false);
-  const [ordersByEventId, setOrdersByEventId] = useState<
-    Record<string, OrdersStats>
+  const [kpisByEventId, setKpisByEventId] = useState<
+    Record<string, RevenueKpiRow>
   >({});
 
   const allowed = role === "ORGANIZER" || role === "ADMIN";
@@ -56,6 +53,11 @@ export default function OrgPage() {
       );
     return { upcomingEvents: upcoming, pastEvents: past };
   }, [events]);
+
+  function formatEUR(cents: number | null | undefined) {
+    const value = typeof cents === "number" ? cents : 0;
+    return `${(value / 100).toFixed(2)} EUR`;
+  }
 
   useEffect(() => {
     if (!allowed) return;
@@ -88,44 +90,36 @@ export default function OrgPage() {
       const eventsData = (data ?? []) as EventRow[];
       setEvents(eventsData);
 
-      const nowTs = Date.now();
-      const pastEventIds = eventsData
-        .filter((event) => new Date(event.start_at).getTime() < nowTs)
-        .map((event) => event.id);
+      const eventIds = eventsData.map((e) => e.id);
 
-      if (pastEventIds.length === 0) {
-        setOrdersByEventId({});
+      if (eventIds.length === 0) {
+        setKpisByEventId({});
         setLoadingEvents(false);
         return;
       }
 
-      const { data: ordersData, error: ordersError } = await supabase
-        .from("orders")
-        .select("event_id,amount_cents,fee_cents")
-        .eq("status", "PAID")
-        .in("event_id", pastEventIds);
+      const { data: kpisData, error: kpisError } = await supabase
+        .from("v_org_event_revenue_kpis")
+        .select(
+          "event_id,primary_ca_cents,secondary_fee_cents,total_ca_cents,primary_orders_paid,secondary_resales_sold"
+        )
+        .eq("organizer_id", user.id)
+        .in("event_id", eventIds);
 
-      if (ordersError) {
-        setErr(ordersError.message);
-        setOrdersByEventId({});
+      if (kpisError) {
+        setErr(kpisError.message);
+        setKpisByEventId({});
         setLoadingEvents(false);
         return;
       }
 
-      const stats = (ordersData ?? []).reduce((acc, order) => {
-        const row = order as OrderRow;
-        const current = acc[row.event_id] ?? {
-          soldCount: 0,
-          grossCents: 0,
-          feeCents: 0,
-        };
-        current.soldCount += 1;
-        current.grossCents += row.amount_cents ?? 0;
-        current.feeCents += row.fee_cents ?? 0;
-        acc[row.event_id] = current;
+      const map = (kpisData ?? []).reduce((acc, row) => {
+        const r = row as RevenueKpiRow;
+        acc[r.event_id] = r;
         return acc;
-      }, {} as Record<string, OrdersStats>);
-      setOrdersByEventId(stats);
+      }, {} as Record<string, RevenueKpiRow>);
+
+      setKpisByEventId(map);
       setLoadingEvents(false);
     }
 
@@ -278,38 +272,13 @@ export default function OrgPage() {
                     </p>
                     <p className="mt-1 text-sm text-white/60">
                       {(() => {
-                        const stats = ordersByEventId[e.id] ?? {
-                          soldCount: 0,
-                          grossCents: 0,
-                          feeCents: 0,
-                        };
-                        const gross = (stats.grossCents / 100).toFixed(2);
-                        const fees = (stats.feeCents / 100).toFixed(2);
-                        return `Vendus : ${stats.soldCount} · CA : ${gross} EUR · Frais : ${fees} EUR`;
-                      })()}
-                    </p>
-                    <p className="mt-1 text-sm text-white/60">
-                      {(() => {
-                        const batches = e.ticket_batches ?? [];
-                        const sold = batches.reduce(
-                          (acc, b) => acc + (b.quantity_sold ?? 0),
-                          0
-                        );
-                        const cap = batches.reduce(
-                          (acc, b) => acc + (b.quantity_total ?? 0),
-                          0
-                        );
-                        const grossCents = batches.reduce(
-                          (acc, b) =>
-                            acc +
-                            (b.quantity_sold ?? 0) * (b.price_cents ?? 0),
-                          0
-                        );
-                        const currency = batches[0]?.currency ?? "EUR";
-                        const gross = (grossCents / 100).toFixed(2);
-                        return cap > 0
-                          ? `Vendus: ${sold} / ${cap} · CA: ${gross} ${currency}`
-                          : `Vendus: ${sold} · CA: ${gross} ${currency}`;
+                        const kpi = kpisByEventId[e.id];
+                        const primary = formatEUR(kpi?.primary_ca_cents);
+                        const secondary = formatEUR(kpi?.secondary_fee_cents);
+                        const total = formatEUR(kpi?.total_ca_cents);
+                        const primaryCount = kpi?.primary_orders_paid ?? 0;
+                        const resaleCount = kpi?.secondary_resales_sold ?? 0;
+                        return `CA primaire : ${primary} (${primaryCount} ventes) · CA secondaire (frais) : ${secondary} (${resaleCount} reventes) · Total : ${total}`;
                       })()}
                     </p>
                   </div>

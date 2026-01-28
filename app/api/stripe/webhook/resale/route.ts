@@ -50,6 +50,21 @@ export async function POST(req: Request) {
     const resaleId = metadata.resale_id;
     const buyerId = metadata.buyer_id;
 
+    // Optional pricing metadata (added by our resale checkout route)
+    const sellerPriceCentsMeta = metadata.seller_price_cents;
+    const buyerPriceCentsMeta = metadata.buyer_price_cents;
+    const feeCentsMeta = metadata.fee_cents;
+
+    const parseIntOrNull = (v: unknown): number | null => {
+      if (typeof v !== "string" || v.trim() === "") return null;
+      const n = Number.parseInt(v, 10);
+      return Number.isFinite(n) ? n : null;
+    };
+
+    const sellerPriceCents = parseIntOrNull(sellerPriceCentsMeta);
+    const buyerPriceCents = parseIntOrNull(buyerPriceCentsMeta);
+    const feeCents = parseIntOrNull(feeCentsMeta);
+
     if (!resaleId || !buyerId) {
       console.error("Missing resale metadata", { resaleId, buyerId });
       return new Response("Missing resale metadata", { status: 400 });
@@ -126,14 +141,36 @@ export async function POST(req: Request) {
     }
 
     const soldAt = new Date().toISOString();
+
+    // Prefer metadata amounts; fallback to Stripe session amount_total for buyer paid.
+    const buyerPaidCents = typeof session.amount_total === "number" ? session.amount_total : null;
+
+    // If we have seller price and buyer paid, derive fee.
+    const derivedFeeCents =
+      sellerPriceCents != null && buyerPaidCents != null ? Math.max(0, buyerPaidCents - sellerPriceCents) : null;
+
+    const updatePayload: Record<string, any> = {
+      state: "SOLD",
+      buyer_id: buyerId,
+      new_ticket_id: newTicket.id,
+      sold_at: soldAt,
+    };
+
+    // Only set these if the columns exist in DB (after migration) and we have values.
+    if (buyerPriceCents != null) updatePayload.buyer_price_cents = buyerPriceCents;
+    if (feeCents != null) updatePayload.fee_cents = feeCents;
+
+    // Fallbacks from session
+    if (updatePayload.buyer_price_cents == null && buyerPaidCents != null) {
+      updatePayload.buyer_price_cents = buyerPaidCents;
+    }
+    if (updatePayload.fee_cents == null && derivedFeeCents != null) {
+      updatePayload.fee_cents = derivedFeeCents;
+    }
+
     const { error: resaleUpdateError } = await supabaseAdmin
       .from("ticket_resales")
-      .update({
-        state: "SOLD",
-        buyer_id: buyerId,
-        new_ticket_id: newTicket.id,
-        sold_at: soldAt,
-      })
+      .update(updatePayload)
       .eq("id", resale.id)
       .eq("state", "CHECKOUT_PENDING");
 
