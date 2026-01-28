@@ -111,20 +111,22 @@ export async function POST(req: Request) {
     : ticket.events;
   const eventTitle = eventInfo?.title ?? "Ticket Sidetick";
 
-  // Buyer pays +10% fee (rounded up to the next cent)
-  // Equivalent to: Math.ceil(resale.price_cents * 1.1)
-  const sellerPriceCents = Number(resale.price_cents || 0);
+  // PoC pricing rule (current behavior): `ticket_resales.price_cents` is the FINAL price paid by the buyer.
+  // The 10% fee is already included in this amount (ex: 99€ shown in marketplace => Stripe must charge 99€).
+  // We derive the seller net and the fee for dashboard/reporting purposes.
+  const buyerPriceCents = Number(resale.price_cents || 0);
 
   // PoC rule: free tickets cannot be resold
   // (avoids Stripe 0€ checkouts and keeps marketplace logic simple)
-  if (!Number.isFinite(sellerPriceCents) || sellerPriceCents <= 0) {
+  if (!Number.isFinite(buyerPriceCents) || buyerPriceCents <= 0) {
     return NextResponse.json({ error: "free_ticket_resale_not_allowed" }, { status: 400 });
   }
 
-  const buyerPriceCents = Math.floor((sellerPriceCents * 110 + 99) / 100);
+  // seller net = floor(buyer / 1.10)
+  const sellerPriceCents = Math.floor((buyerPriceCents * 100) / 110);
   const feeCents = buyerPriceCents - sellerPriceCents;
 
-  if (!Number.isFinite(buyerPriceCents) || buyerPriceCents <= 0) {
+  if (!Number.isFinite(sellerPriceCents) || sellerPriceCents <= 0) {
     return NextResponse.json({ error: "invalid_price" }, { status: 400 });
   }
 
