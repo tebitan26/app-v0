@@ -1,7 +1,9 @@
-import type { Metadata } from "next";
 import "./globals.css";
+import type { Metadata } from "next";
 import Link from "next/link";
-import AuthNav from "./components/AuthNav";
+
+import AuthNav from "@/app/components/AuthNav";
+import { LanguageButton } from "@/app/components/LanguageButton";
 
 export const metadata: Metadata = {
   title: "Sidetick V0",
@@ -20,6 +22,7 @@ function SiteHeader() {
       </Link>
 
       <nav className="flex items-center gap-4 text-sm text-white/70">
+        <LanguageButton />
         <AuthNav />
       </nav>
     </header>
@@ -49,10 +52,9 @@ export default function RootLayout({
   return (
     <html lang="fr">
       <body className="min-h-screen bg-[#1B003B] text-white">
-        <div className="sidetick-glow" />
-        <div className="mx-auto max-w-5xl px-6 py-10">
+        <div className="mx-auto flex min-h-screen max-w-6xl flex-col px-5 py-6">
           <SiteHeader />
-          <main className="py-12">{children}</main>
+          <main className="flex-1 pt-8">{children}</main>
           <SiteFooter />
         </div>
       </body>
